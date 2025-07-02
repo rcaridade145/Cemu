@@ -245,16 +245,17 @@ jobs:
          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         -G Ninja
 
-    - name: "Install opam (for Infer)"
+    - name: "Download Infer"
       run: |
-        brew install opam
-
-    - name: "Install Infer"
-      run: |
-        git clone https://github.com/facebook/infer.git
-        cd infer
-        ./build-infer.sh --yes
-        echo "$PWD/infer/bin" >> $GITHUB_PATH
+        ARCH_NAME=${{ matrix.arch }}
+        if [[ "$ARCH_NAME" == "x86_64" ]]; then
+          INFER_URL="https://github.com/facebook/infer/releases/download/v1.2.0/infer-osx-x86_64-v1.2.0.tar.xz"
+        else
+          INFER_URL="https://github.com/facebook/infer/releases/download/v1.2.0/infer-osx-arm64-v1.2.0.tar.xz"
+        fi
+        curl -LO "$INFER_URL"
+        tar -xf infer-osx-*-v1.2.0.tar.xz
+        echo "$PWD/infer-osx-*/bin" >> $GITHUB_PATH
 
     - name: "Run Infer static analysis"
       run: |
