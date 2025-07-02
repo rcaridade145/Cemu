@@ -262,9 +262,16 @@ jobs:
     - name: Install GMP
       run: brew install gmp
 
-    - name: Work around GMP dylib mismatch (x86_64)
+    - name: Symlink libgmp.10.dylib if missing
       run: |
-        ln -sf /usr/local/opt/gmp/lib/libgmp.dylib /usr/local/opt/gmp/lib/libgmp.10.dylib
+        GMP_DIR="$(brew --prefix gmp)/lib"
+        if [ ! -e "$GMP_DIR/libgmp.10.dylib" ]; then
+          echo "Creating symlink for libgmp.10.dylib -> libgmp.dylib"
+          ln -s "$GMP_DIR/libgmp.dylib" "$GMP_DIR/libgmp.10.dylib"
+        else
+          echo "libgmp.10.dylib already exists"
+        fi
+
 
     - name: "Run Infer static analysis"
       run: |
