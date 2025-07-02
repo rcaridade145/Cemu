@@ -262,15 +262,16 @@ jobs:
     - name: Install GMP
       run: brew install gmp
 
-    - name: Symlink libgmp.10.dylib if missing
+    - name: Fix libgmp.10.dylib path for Infer
       run: |
-        GMP_DIR="$(brew --prefix gmp)/lib"
-        if [ ! -e "$GMP_DIR/libgmp.10.dylib" ]; then
-          echo "Creating symlink for libgmp.10.dylib -> libgmp.dylib"
-          ln -s "$GMP_DIR/libgmp.dylib" "$GMP_DIR/libgmp.10.dylib"
-        else
-          echo "libgmp.10.dylib already exists"
-        fi
+        GMP_ACTUAL_DIR="$(brew --prefix gmp)/lib"
+        EXPECTED_DIR="/usr/local/opt/gmp/lib"
+        
+        # Create expected dir if missing
+        sudo mkdir -p "$EXPECTED_DIR"
+        
+        # Force symlink to where infer expects it
+        sudo ln -sf "$GMP_ACTUAL_DIR/libgmp.dylib" "$EXPECTED_DIR/libgmp.10.dylib"
 
 
     - name: "Run Infer static analysis"
