@@ -245,6 +245,10 @@ jobs:
          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         -G Ninja
 
+    - name: "Install opam (for Infer)"
+      run: |
+        brew install opam
+
     - name: "Install Infer"
       run: |
         git clone https://github.com/facebook/infer.git
