@@ -260,9 +260,12 @@ jobs:
         INFER_DIR=$(find . -maxdepth 1 -type d -name "infer-osx-*")
         echo "$PWD/$INFER_DIR/bin" >> $GITHUB_PATH
 
-    - name: "Run Infer static analysis"
+    - name: Work around GMP dylib mismatch (x86_64)
       run: |
-        infer run --compilation-database build/compile_commands.json || true
+        ln -sf /usr/local/opt/gmp/lib/libgmp.dylib /usr/local/opt/gmp/lib/libgmp.10.dylib
+        - name: "Run Infer static analysis"
+          run: |
+            infer run --compilation-database build/compile_commands.json || true
 
     - name: "Upload Infer analysis results"
       uses: actions/upload-artifact@v4
