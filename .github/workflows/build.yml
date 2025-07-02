@@ -244,7 +244,8 @@ jobs:
         -DMACOS_BUNDLE=ON \
          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         -G Ninja
-
+    - name: Install GMP
+      run: brew install gmp
     - name: Install Infer
       run: |
         ARCH_NAME="${{ matrix.arch }}"
