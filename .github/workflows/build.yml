@@ -262,6 +262,10 @@ jobs:
     - name: Install GMP
       run: brew install gmp
 
+    - name: Work around GMP dylib mismatch (x86_64)
+      run: |
+        ln -sf /usr/local/opt/gmp/lib/libgmp.dylib /usr/local/opt/gmp/lib/libgmp.10.dylib
+
     - name: "Run Infer static analysis"
       run: |
         infer run --compilation-database build/compile_commands.json || true
