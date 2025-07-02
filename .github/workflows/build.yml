@@ -118,14 +118,15 @@ jobs:
       run: |
         infer run --compilation-database build/compile_commands.json || true
 
-    - name: Tar artifacts to bypass invalid characters
+    - name: "Archive infer-out directory"
       run: |
-        tar -cvf cemu-artifacts.tar ./bin
-    
-    - uses: actions/upload-artifact@v4
+        tar -cf infer-out.tar -C /Users/runner/work/Cemu/Cemu infer-out
+
+    - name: "Upload infer-out archive"
+      uses: actions/upload-artifact@v4
       with:
-        name: cemu-artifact-tar
-        path: cemu-artifacts.tar
+        name: infer-out-results
+        path: infer-out.tar
 
     - name: "Build Cemu"
       run: |
