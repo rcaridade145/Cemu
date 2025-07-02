@@ -245,17 +245,20 @@ jobs:
          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         -G Ninja
    
-    - name: "Download Infer"
+    - name: Install Infer
       run: |
-        ARCH_NAME=${{ matrix.arch }}
+        ARCH_NAME="${{ matrix.arch }}"
         if [[ "$ARCH_NAME" == "x86_64" ]]; then
           INFER_URL="https://github.com/facebook/infer/releases/download/v1.2.0/infer-osx-x86_64-v1.2.0.tar.xz"
         else
           INFER_URL="https://github.com/facebook/infer/releases/download/v1.2.0/infer-osx-arm64-v1.2.0.tar.xz"
         fi
+
         curl -LO "$INFER_URL"
         tar -xf infer-osx-*-v1.2.0.tar.xz
-        echo "$PWD/infer-osx-*/bin" >> $GITHUB_PATH
+        INFER_DIR=$(find . -maxdepth 1 -type d -name "infer-osx-*")
+        echo "$PWD/$INFER_DIR/bin" >> $GITHUB_PATH
+
 
     - name: "Run Infer static analysis"
       run: |
