@@ -1,18 +1,19 @@
 name: Build Cemu
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       next_version_major:
+        description: 'Next major version (optional)'
         required: false
         type: string
       next_version_minor:
+        description: 'Next minor version (optional)'
         required: false
         type: string
-  workflow_dispatch:  # Enables manual trigger
 
 env:
-  VCPKG_ROOT: "${{github.workspace}}/dependencies/vcpkg"
+  VCPKG_ROOT: "${{ github.workspace }}/dependencies/vcpkg"
   VCPKG_BINARY_SOURCES: 'clear;nuget,GitHub,readwrite'
 
 jobs:
@@ -22,119 +23,105 @@ jobs:
       matrix:
         arch: [x86_64, arm64]
     steps:
-    - name: "Checkout repo"
+    - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        submodules: "recursive"
-        
-    - name: Setup release mode parameters
+        submodules: recursive
+
+    - name: Setup build parameters
       run: |
         echo "BUILD_MODE=release" >> $GITHUB_ENV
         echo "BUILD_FLAGS=" >> $GITHUB_ENV
         echo "Build mode is release"
 
     - name: Setup build flags for version
-      if: ${{ inputs.next_version_major != '' }}
+      if: ${{ github.event.inputs.next_version_major != '' }}
       run: |
-        echo "[INFO] Version ${{ inputs.next_version_major }}.${{ inputs.next_version_minor }}"
-        echo "BUILD_FLAGS=${{ env.BUILD_FLAGS }} -DEMULATOR_VERSION_MAJOR=${{ inputs.next_version_major }} -DEMULATOR_VERSION_MINOR=${{ inputs.next_version_minor }}" >> $GITHUB_ENV
-        
-    - name: "Install system dependencies"
+        echo "[INFO] Version ${{ github.event.inputs.next_version_major }}.${{ github.event.inputs.next_version_minor }}"
+        echo "BUILD_FLAGS=${{ env.BUILD_FLAGS }} -DEMULATOR_VERSION_MAJOR=${{ github.event.inputs.next_version_major }} -DEMULATOR_VERSION_MINOR=${{ github.event.inputs.next_version_minor }}" >> $GITHUB_ENV
+
+    - name: Install system dependencies
       run: |
         brew update
-        brew install ninja nasm automake libtool
+        brew install ninja nasm automake libtool gmp
 
-    - name: "Install molten-vk"
+    - name: Install MoltenVK
       run: |
         curl -L -O https://github.com/KhronosGroup/MoltenVK/releases/download/v1.3.0/MoltenVK-macos.tar
         tar xf MoltenVK-macos.tar
         sudo mkdir -p /usr/local/lib
         sudo cp MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib /usr/local/lib
 
-    - name: "Setup cmake"
+    - name: Setup CMake
       uses: jwlawson/actions-setup-cmake@v2
       with:
         cmake-version: '3.29.0'
 
-    - name: "Bootstrap vcpkg"
+    - name: Bootstrap vcpkg
+      run: bash ./dependencies/vcpkg/bootstrap-vcpkg.sh
+
+    - name: Setup NuGet credentials for vcpkg
+      shell: bash
       run: |
-        bash ./dependencies/vcpkg/bootstrap-vcpkg.sh
-        
-    - name: 'Setup NuGet Credentials for vcpkg'
-      shell: 'bash'
-      run: |
-        mono `./dependencies/vcpkg/vcpkg fetch nuget | tail -n 1` \
-        sources add \
-        -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
-        -storepasswordincleartext \
-        -name "GitHub" \
-        -username "${{ github.repository_owner }}" \
-        -password "${{ secrets.GITHUB_TOKEN }}"
-        mono `./dependencies/vcpkg/vcpkg fetch nuget | tail -n 1` \
-        setapikey "${{ secrets.GITHUB_TOKEN }}" \
-        -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
-        
-    - name: "cmake"
+        mono $(./dependencies/vcpkg/vcpkg fetch nuget | tail -n 1) \
+          sources add \
+          -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+          -storepasswordincleartext \
+          -name "GitHub" \
+          -username "${{ github.repository_owner }}" \
+          -password "${{ secrets.GITHUB_TOKEN }}"
+        mono $(./dependencies/vcpkg/vcpkg fetch nuget | tail -n 1) \
+          setapikey "${{ secrets.GITHUB_TOKEN }}" \
+          -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+
+    - name: Configure CMake
       run: |
         mkdir build
         cd build
         cmake .. ${{ env.BUILD_FLAGS }} \
-        -DCMAKE_BUILD_TYPE=${{ env.BUILD_MODE }} \
-        -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
-        -DMACOS_BUNDLE=ON \
-         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-        -G Ninja
-   
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_MODE }} \
+          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+          -DMACOS_BUNDLE=ON \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+          -G Ninja
+
     - name: Install Infer
       run: |
-        ARCH_NAME="${{ matrix.arch }}"
-        if [[ "$ARCH_NAME" == "x86_64" ]]; then
+        if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
           INFER_URL="https://github.com/facebook/infer/releases/download/v1.2.0/infer-osx-x86_64-v1.2.0.tar.xz"
         else
           INFER_URL="https://github.com/facebook/infer/releases/download/v1.2.0/infer-osx-arm64-v1.2.0.tar.xz"
         fi
-
         curl -LO "$INFER_URL"
         tar -xf infer-osx-*-v1.2.0.tar.xz
         INFER_DIR=$(find . -maxdepth 1 -type d -name "infer-osx-*")
         echo "$PWD/$INFER_DIR/bin" >> $GITHUB_PATH
 
-    - name: Install GMP
-      run: brew install gmp
-
-    - name: Fix libgmp.10.dylib path for Infer
+    - name: Fix Infer GMP path
       run: |
         GMP_ACTUAL_DIR="$(brew --prefix gmp)/lib"
         EXPECTED_DIR="/usr/local/opt/gmp/lib"
-        
-        # Create expected dir if missing
         sudo mkdir -p "$EXPECTED_DIR"
-        
-        # Force symlink to where infer expects it
         sudo ln -sf "$GMP_ACTUAL_DIR/libgmp.dylib" "$EXPECTED_DIR/libgmp.10.dylib"
 
+    - name: Run Infer static analysis
+      run: infer run --compilation-database build/compile_commands.json || true
 
-    - name: "Run Infer static analysis"
-      run: |
-        infer run --compilation-database build/compile_commands.json || true
+    - name: Archive Infer output
+      run: tar -cf infer-out.tar -C ${{ github.workspace }} infer-out
 
-    - name: "Archive infer-out directory"
-      run: |
-        tar -cf infer-out.tar -C /Users/runner/work/Cemu/Cemu infer-out
-
-    - name: "Upload infer-out archive"
+    - name: Upload Infer artifact
       uses: actions/upload-artifact@v4
       with:
         name: infer-out-results
         path: infer-out.tar
 
-    - name: "Build Cemu"
-      run: |
-        cmake --build build
+    - name: Build Cemu
+      run: cmake --build build
 
-    - name: Prepare artifact
+    - name: Prepare DMG artifact
       run: |
-        mkdir bin/Cemu_app
+        mkdir -p bin/Cemu_app
         mv bin/Cemu_release.app bin/Cemu_app/Cemu.app
         mv bin/Cemu_app/Cemu.app/Contents/MacOS/Cemu_release bin/Cemu_app/Cemu.app/Contents/MacOS/Cemu
         sed -i '' 's/Cemu_release/Cemu/g' bin/Cemu_app/Cemu.app/Contents/Info.plist
@@ -143,8 +130,8 @@ jobs:
         hdiutil create ./bin/tmp.dmg -ov -volname "Cemu" -fs HFS+ -srcfolder "./bin/Cemu_app"
         hdiutil convert ./bin/tmp.dmg -format UDZO -o bin/Cemu.dmg
         rm bin/tmp.dmg
-              
-    - name: Upload artifact
+
+    - name: Upload DMG artifact
       uses: actions/upload-artifact@v4
       with:
         name: cemu-bin-macos-${{ matrix.arch }}
