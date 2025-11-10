@@ -41,6 +41,11 @@ jobs:
       run: |
         brew update
         brew install ninja llvm
+        ninja --version
+        clang-tidy --version
+
+    - name: Ensure Xcode CLI tools
+      run: xcode-select --install || echo "Already installed"
 
     - name: Setup CMake
       uses: jwlawson/actions-setup-cmake@v2
@@ -58,7 +63,7 @@ jobs:
           -DCMAKE_CXX_CLANG_TIDY="clang-tidy;-checks=*;-warnings-as-errors=*" \
           -G Ninja
 
-    - name: Run clang-tidy manually
+    - name: Run clang-tidy manually on Obj-C++ files
       run: |
         export PATH="/usr/local/opt/llvm/bin:$PATH"
         clang-tidy -p build $(find src -name "*.cpp" -or -name "*.mm") || true
