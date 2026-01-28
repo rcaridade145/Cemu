@@ -61,6 +61,7 @@ namespace H264
 			return 0;
 		}
 
+		cemuLog_log(LogType::H264, "Width {} | height {} | codecProfile {}", width,height,codecLevel);
 		// note: On console this seems to check if maxWidth or maxHeight < 64 but Pikmin 3 passes 32x32 and crashes if this function fails ?
 		if (width < 0x20 || height < 0x20 || width > 2800 || height > 1408 || sizeRequirementOut == MPTR_NULL || codecLevel >= 52 || (codecProfile != 0x42 && codecProfile != 0x4D && codecProfile != 0x64))
 			return 0x1010000;
@@ -289,6 +290,9 @@ namespace H264
 
 	uint32 H264DECOpen(void* workMemory)
 	{
+		if (workMemory == NULL) {
+			cemuLog_log(LogType::Force, "H264DECOpen: workMemory is null ");
+		}		
 		H264Context* ctx = (H264Context*)workMemory;
 		uint32 sessionHandle;
 		_CreateDecoderSession(sessionHandle);
@@ -308,6 +312,9 @@ namespace H264
 
 	uint32 H264DECBegin(void* workMemory)
 	{
+		if (workMemory == NULL) {
+			cemuLog_log(LogType::Force, "H264DECBegin: workMemory is null ");
+		}
 		H264Context* ctx = (H264Context*)workMemory;
 		H264DecoderBackend* session = _AcquireDecoderSession(ctx->sessionHandle);
 		if (!session)
@@ -325,6 +332,9 @@ namespace H264
 
 	H264DEC_STATUS H264DECEnd(void* workMemory)
 	{
+		if (workMemory == NULL) {
+			cemuLog_log(LogType::Force, "H264DECEnd: workMemory is null ");
+		}
 		H264Context* ctx = (H264Context*)workMemory;
 		H264DecoderBackend* session = _AcquireDecoderSession(ctx->sessionHandle);
 		if (!session)
