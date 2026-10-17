@@ -69,6 +69,10 @@ add_executable(CemuBin
 	mainLLE.cpp
 )
 
+if (ENABLE_KOSMICKRISP)
+	add_dependencies(CemuBin kosmickrisp)
+endif()
+
 cemu_use_precompiled_header(CemuBin)
 
 if(MSVC AND MSVC_VERSION EQUAL 1940)
@@ -96,6 +100,24 @@ set_property(TARGET CemuBin PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONF
 set_property(TARGET CemuBin PROPERTY WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>)
 set(OUTPUT_NAME "Cemu_$<LOWER_CASE:$<CONFIG>>")
 
+if (ENABLE_KOSMICKRISP)
+	find_library(KOSMICKRISP_LOADER
+		NAMES vulkan vulkan.1 libvulkan.dylib
+		PATHS /opt/homebrew/lib /usr/local/lib
+		REQUIRED
+	)
+	get_filename_component(KOSMICKRISP_LOADER_DIR "${KOSMICKRISP_LOADER}" DIRECTORY)
+	set(KOSMICKRISP_LOADER_VERSIONED "${KOSMICKRISP_LOADER_DIR}/libvulkan.1.dylib")
+endif()
+
+if (APPLE AND ENABLE_LIBUSB)
+	if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+		set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib/libusb-1.0.0.dylib")
+	else()
+		set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libusb-1.0.0.dylib")
+	endif()
+endif()
+
 if (MACOS_BUNDLE)
 	set_property(TARGET CemuBin PROPERTY MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resource/MacOSXBundleInfo.plist.in")
 
@@ -110,7 +132,11 @@ if (MACOS_BUNDLE)
 	set(MACOSX_BUNDLE_COPYRIGHT "Copyright © ${CURRENT_YEAR} Cemu Project")
 
 	set(MACOSX_BUNDLE_CATEGORY "public.app-category.games")
- 	set(MACOSX_MINIMUM_SYSTEM_VERSION "13.4")
+	if (ENABLE_KOSMICKRISP)
+		set(MACOSX_MINIMUM_SYSTEM_VERSION "26.0")
+	else()
+		set(MACOSX_MINIMUM_SYSTEM_VERSION "13.4")
+	endif()
   	set(MACOSX_BUNDLE_TYPE_EXTENSION "wua")
 
 	set_target_properties(CemuBin PROPERTIES
@@ -124,7 +150,7 @@ if (MACOS_BUNDLE)
 			COMMAND ${CMAKE_COMMAND} ARGS -E copy_directory "${CMAKE_SOURCE_DIR}/bin/${folder}" "$<TARGET_BUNDLE_DIR:CemuBin>/Contents/SharedSupport/${folder}")
 	endforeach(folder)
 
-	if (ENABLE_VULKAN)
+	if (ENABLE_VULKAN AND NOT ENABLE_KOSMICKRISP)
 		if (EXISTS "/usr/local/lib/libMoltenVK.dylib")
 			set(MOLTENVK_PATH "/usr/local/lib/libMoltenVK.dylib")
 		elseif (EXISTS "/opt/homebrew/lib/libMoltenVK.dylib")
@@ -134,18 +160,19 @@ if (MACOS_BUNDLE)
 		endif ()
   endif()
   
-	if (ENABLE_LIBUSB)
-		if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-		    set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib/libusb-1.0.0.dylib")
-		else()
-		    set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libusb-1.0.0.dylib")
-		endif()
-	endif()
-
 	set(APP_BUNDLE_DIR "$<TARGET_BUNDLE_DIR:CemuBin>")
 	set(FRAMEWORKS_DIR "${APP_BUNDLE_DIR}/Contents/Frameworks")
 
-	if (ENABLE_VULKAN)
+	if (ENABLE_VULKAN AND ENABLE_KOSMICKRISP)
+		add_custom_command(TARGET CemuBin POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E make_directory "${FRAMEWORKS_DIR}"
+			COMMAND ${CMAKE_COMMAND} -E copy "${KOSMICKRISP_LOADER_VERSIONED}" "${FRAMEWORKS_DIR}/libvulkan.1.dylib"
+			COMMAND install_name_tool -id "@rpath/libvulkan.1.dylib" "${FRAMEWORKS_DIR}/libvulkan.1.dylib"
+			COMMAND codesign --force --sign - "${FRAMEWORKS_DIR}/libvulkan.1.dylib"
+			COMMAND ${CMAKE_COMMAND} -E copy "${KOSMICKRISP_DIR}/libvulkan_kosmickrisp.dylib" "${FRAMEWORKS_DIR}/libvulkan_kosmickrisp.dylib"
+			COMMAND ${CMAKE_COMMAND} -E copy "${KOSMICKRISP_DIR}/kosmickrisp_mesa_icd.json" "${FRAMEWORKS_DIR}/kosmickrisp_mesa_icd.json"
+		)
+	elseif (ENABLE_VULKAN)
 		add_custom_command(TARGET CemuBin POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy 
 				"${MOLTENVK_PATH}"
@@ -177,20 +204,40 @@ if (MACOS_BUNDLE)
 else()
     if(APPLE)
 		if (ENABLE_VULKAN)
-			find_library(MOLTENVK_LIBRARY
-				NAMES MoltenVK moltenvk libMoltenVK.dylib
-				PATHS /usr/local/lib /opt/homebrew/lib
-			)
-			if(MOLTENVK_LIBRARY)
-				message(STATUS "Found MoltenVK: ${MOLTENVK_LIBRARY}")
-				target_link_libraries(CemuBin PRIVATE ${MOLTENVK_LIBRARY})
+			if (ENABLE_KOSMICKRISP)
+				add_custom_command(TARGET CemuBin POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy "${KOSMICKRISP_LOADER_VERSIONED}" "$<TARGET_FILE_DIR:CemuBin>/libvulkan.1.dylib"
+					COMMAND install_name_tool -id "@rpath/libvulkan.1.dylib" "$<TARGET_FILE_DIR:CemuBin>/libvulkan.1.dylib"
+					COMMAND codesign --force --sign - "$<TARGET_FILE_DIR:CemuBin>/libvulkan.1.dylib"
+					COMMAND ${CMAKE_COMMAND} -E copy "${KOSMICKRISP_DIR}/libvulkan_kosmickrisp.dylib" "$<TARGET_FILE_DIR:CemuBin>/libvulkan_kosmickrisp.dylib"
+					COMMAND ${CMAKE_COMMAND} -E copy "${KOSMICKRISP_DIR}/kosmickrisp_mesa_icd.json" "$<TARGET_FILE_DIR:CemuBin>/kosmickrisp_mesa_icd.json"
+				)
+				set_target_properties(CemuBin PROPERTIES
+					BUILD_WITH_INSTALL_RPATH TRUE
+					INSTALL_RPATH "@executable_path"
+				)
+				if (ENABLE_LIBUSB)
+					add_custom_command(TARGET CemuBin POST_BUILD
+						COMMAND ${CMAKE_COMMAND} -E copy "${LIBUSB_PATH}" "$<TARGET_FILE_DIR:CemuBin>/libusb-1.0.0.dylib"
+						COMMAND install_name_tool -change @rpath/libusb-1.0.0.dylib @executable_path/libusb-1.0.0.dylib "$<TARGET_FILE:CemuBin>"
+					)
+				endif()
 			else()
-				message(WARNING "libMoltenVK.dylib not found")
+				find_library(MOLTENVK_LIBRARY
+					NAMES MoltenVK moltenvk libMoltenVK.dylib
+					PATHS /usr/local/lib /opt/homebrew/lib
+				)
+				if(MOLTENVK_LIBRARY)
+					message(STATUS "Found MoltenVK: ${MOLTENVK_LIBRARY}")
+					target_link_libraries(CemuBin PRIVATE ${MOLTENVK_LIBRARY})
+				else()
+					message(WARNING "libMoltenVK.dylib not found")
+				endif()
+				set_target_properties(CemuBin PROPERTIES
+					BUILD_WITH_INSTALL_RPATH TRUE
+					INSTALL_RPATH "/usr/local/lib;/opt/homebrew/lib"
+				)
 			endif()
-			set_target_properties(CemuBin PROPERTIES
-				BUILD_WITH_INSTALL_RPATH TRUE
-				INSTALL_RPATH "/usr/local/lib;/opt/homebrew/lib"
-			)
 		endif()
     endif()
 endif()

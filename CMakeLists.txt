@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.21.1)
 option(ENABLE_VCPKG "Enable the vcpkg package manager" ON)
 option(MACOS_BUNDLE "The executable when built on macOS will be created as an application bundle" OFF)
 option(ALLOW_PORTABLE "Allow Cemu to be run in portable mode" ON)
+option(ENABLE_KOSMICKRISP "Use KosmicKrisp for Vulkan on macOS 26 or newer" OFF)
 
 # used by CI script to set version:
 set(EMULATOR_VERSION_MAJOR "0" CACHE STRING "")
@@ -99,7 +100,11 @@ endif()
 
 if (APPLE)
     enable_language(OBJC OBJCXX)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.4")
+    if (ENABLE_KOSMICKRISP)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
+    else()
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.4")
+    endif()
 endif()
 
 if (UNIX AND NOT APPLE)
@@ -120,6 +125,10 @@ option(ENABLE_OPENGL "Enables the OpenGL backend" ${ENABLE_OPENGL_DEFAULT})
 option(ENABLE_VULKAN "Enables the Vulkan backend" ON)
 option(ENABLE_METAL "Enables the Metal backend" ${ENABLE_METAL_DEFAULT})
 option(ENABLE_DISCORD_RPC "Enables the Discord Rich Presence feature" ON)
+
+if (ENABLE_KOSMICKRISP AND (NOT APPLE OR NOT ENABLE_VULKAN))
+    message(FATAL_ERROR "KosmicKrisp requires macOS and the Vulkan backend")
+endif()
 
 if (ENABLE_METAL AND NOT APPLE)
     message(FATAL_ERROR "Metal backend is only supported on Apple platforms")
@@ -202,6 +211,12 @@ if (ENABLE_VULKAN)
 	include_directories("dependencies/Vulkan-Headers/include")
 	add_compile_definitions(ENABLE_VULKAN)
 	add_compile_definitions(VK_NO_PROTOTYPES)
+	if (ENABLE_KOSMICKRISP)
+		add_compile_definitions(ENABLE_KOSMICKRISP)
+		if (MACOS_BUNDLE)
+			add_compile_definitions(CEMU_KOSMICKRISP_BUNDLE)
+		endif()
+	endif()
 endif()
 
 if (ENABLE_OPENGL)
@@ -266,6 +281,14 @@ endif()
 find_package(ZArchive QUIET)
 if (NOT ZArchive_FOUND)
 	add_subdirectory("dependencies/ZArchive" EXCLUDE_FROM_ALL)
+endif()
+
+if (ENABLE_KOSMICKRISP)
+	set(KOSMICKRISP_DIR "${CMAKE_BINARY_DIR}/dependencies/mesa-kosmickrisp/outputs")
+	add_subdirectory(
+		"dependencies/mesa-kosmickrisp"
+		"${CMAKE_BINARY_DIR}/dependencies/mesa-kosmickrisp"
+	)
 endif()
 
 add_subdirectory(src)

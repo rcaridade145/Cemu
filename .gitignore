@@ -22,6 +22,7 @@ out/
 .cache/
 bin/Cemu_*
 bin/Cemu_*.exe
+bin/kosmickrisp_mesa_icd.json
 
 # Cemu bin files
 bin/otp.bin

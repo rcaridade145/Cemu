@@ -7,6 +7,13 @@
 #include <dlfcn.h>
 #endif
 
+#if BOOST_OS_MACOS && defined(ENABLE_KOSMICKRISP)
+#include <filesystem>
+#include <mach-o/dyld.h>
+#include <stdlib.h>
+#include <vector>
+#endif
+
 #define VULKAN_API_CPU_BENCHMARK 0	// if 1, Cemu will log the CPU time spent per Vulkan API function
 
 bool g_vulkan_available = false;
@@ -151,7 +158,37 @@ void* dlopen_vulkan_loader()
 	if(!vulkan_so)
 		vulkan_so = dlopen("libvulkan.so.1", RTLD_NOW);
 #elif BOOST_OS_MACOS
+#if defined(ENABLE_KOSMICKRISP)
+	uint32_t executable_path_size = 0;
+	if (_NSGetExecutablePath(nullptr, &executable_path_size) != -1 || executable_path_size == 0)
+	{
+		cemuLog_log(LogType::Force, "Failed to determine executable path for the KosmicKrisp Vulkan loader.");
+		return nullptr;
+	}
+	std::vector<char> executable_path(executable_path_size);
+	if (_NSGetExecutablePath(executable_path.data(), &executable_path_size) != 0)
+	{
+		cemuLog_log(LogType::Force, "Failed to determine executable path for the KosmicKrisp Vulkan loader.");
+		return nullptr;
+	}
+
+	std::filesystem::path vulkan_directory = std::filesystem::path(executable_path.data()).parent_path();
+#if defined(CEMU_KOSMICKRISP_BUNDLE)
+	vulkan_directory /= "../Frameworks";
+#endif
+	vulkan_directory = vulkan_directory.lexically_normal();
+	const auto icd_path = (vulkan_directory / "kosmickrisp_mesa_icd.json").string();
+	if (setenv("VK_DRIVER_FILES", icd_path.c_str(), 1) != 0 ||
+		setenv("VK_ICD_FILENAMES", icd_path.c_str(), 1) != 0)
+	{
+		cemuLog_log(LogType::Force, "Failed to configure the KosmicKrisp Vulkan ICD.");
+		return nullptr;
+	}
+	const auto loader_path = (vulkan_directory / "libvulkan.1.dylib").string();
+	void* vulkan_so = dlopen(loader_path.c_str(), RTLD_NOW);
+#else
 	void* vulkan_so = dlopen("libMoltenVK.dylib", RTLD_NOW);
+#endif
 #endif
 	return vulkan_so;
 }

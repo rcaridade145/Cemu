@@ -148,8 +148,13 @@ jobs:
         run: |
           cd cemu-macos
           for bin_dir in cemu-bin-macos-*; do
-            arch="${bin_dir##cemu-bin-macos-}"
-            cp $bin_dir/Cemu.dmg ../upload/cemu-${{ env.CEMU_VERSION }}-macos-12-$arch.dmg
+            if [[ "$bin_dir" == cemu-bin-macos-kosmickrisp-* ]]; then
+              arch="${bin_dir##cemu-bin-macos-kosmickrisp-}"
+              cp "$bin_dir/Cemu.dmg" "../upload/cemu-${{ env.CEMU_VERSION }}-macos-26-$arch-kosmickrisp.dmg"
+            else
+              arch="${bin_dir##cemu-bin-macos-}"
+              cp "$bin_dir/Cemu.dmg" "../upload/cemu-${{ env.CEMU_VERSION }}-macos-12-$arch.dmg"
+            fi
           done
 
       - name: Create release

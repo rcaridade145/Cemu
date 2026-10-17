@@ -28,3 +28,4 @@
 [submodule "dependencies/mesa-kosmickrisp"]
 	path = dependencies/mesa-kosmickrisp
 	url = https://github.com/shadexternals/mesa-kosmickrisp.git
+	shallow = true
