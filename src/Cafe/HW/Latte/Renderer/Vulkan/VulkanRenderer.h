@@ -474,7 +474,9 @@ private:
 
 		struct
 		{
+			bool shaderRoundingModeRTEFloat16{ false };
 			bool shaderRoundingModeRTEFloat32{ false };
+			bool shaderRoundingModeRTEFloat64{ false };
 		}shaderFloatControls; // from VK_KHR_shader_float_controls
 
 		struct
@@ -596,6 +598,7 @@ private:
 	VkInstance m_instance = VK_NULL_HANDLE;
 	VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
 	VkDevice  m_logicalDevice = VK_NULL_HANDLE;
+	bool m_geometryShaderEnabled = false;
 	VkDebugUtilsMessengerEXT m_debugCallback = nullptr;
 	volatile bool m_destructionRequested = false;
 
@@ -748,13 +751,17 @@ private:
 		if constexpr ((TSyncOp & BUFFER_SHADER_READ) != 0)
 		{
 			// in theory: VK_ACCESS_INDEX_READ_BIT should be set here too but indices are currently separated
-			stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			if (m_geometryShaderEnabled)
+				stages |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
 			accessFlags |= VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
 		}
 
 		if constexpr ((TSyncOp & BUFFER_SHADER_WRITE) != 0)
 		{
-			stages |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			stages |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			if (m_geometryShaderEnabled)
+				stages |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
 			accessFlags |= VK_ACCESS_SHADER_WRITE_BIT;
 		}
 
@@ -799,7 +806,9 @@ private:
 
 		if constexpr ((TSyncOp & IMAGE_READ) != 0)
 		{
-			stages |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			stages |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			if (m_geometryShaderEnabled)
+				stages |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
 			accessFlags |= VK_ACCESS_SHADER_READ_BIT;
 
 			stages |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -954,7 +963,9 @@ private:
 
 public:
 	bool GetDisableMultithreadedCompilation() const { return m_featureControl.disableMultithreadedCompilation; }
+	bool HasSPRIVRoundingModeRTE16() const { return m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat16; }
 	bool HasSPRIVRoundingModeRTE32() const { return m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat32; }
+	bool HasSPRIVRoundingModeRTE64() const { return m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat64; }
 	bool IsDebugMarkersEnabled() const { return m_featureControl.usingDebugMarkerTool; }
 	bool IsTracingToolEnabled() const { return m_featureControl.usingTracingTool; }
 	bool UseAttachmentFeedbackLoop() const { return m_featureControl.deviceExtensions.attachment_feedback_loop_dynamic_state; }

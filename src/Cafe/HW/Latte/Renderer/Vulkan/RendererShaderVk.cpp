@@ -436,7 +436,8 @@ void RendererShaderVk::ShaderCacheLoading_begin(uint64 cacheTitleId)
 		delete s_spirvCache;
 		s_spirvCache = nullptr;
 	}
-	uint32 spirvCacheMagic = GeneratePrecompiledCacheId();
+	// Invalidate SPIR-V compiled before the float-control execution-mode fix.
+	uint32 spirvCacheMagic = GeneratePrecompiledCacheId() + 1;
 	const std::string cacheFilename = fmt::format("{:016x}_spirv.bin", cacheTitleId);
 	const fs::path cachePath = ActiveSettings::GetCachePath("shaderCache/precompiled/{}", cacheFilename);
 	s_spirvCache = FileCache::Open(cachePath, true, spirvCacheMagic);

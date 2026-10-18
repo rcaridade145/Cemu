@@ -317,8 +317,12 @@ void VulkanRenderer::GetDeviceFeatures()
 
 	m_featureControl.deviceExtensions.pipeline_creation_cache_control = pcc.pipelineCreationCacheControl;
 	m_featureControl.deviceExtensions.custom_border_color_without_format = m_featureControl.deviceExtensions.custom_border_color && bcf.customBorderColorWithoutFormat;
+	m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat16 = m_featureControl.deviceExtensions.shader_float_controls && pfcp.shaderRoundingModeRTEFloat16;
 	m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat32 = m_featureControl.deviceExtensions.shader_float_controls && pfcp.shaderRoundingModeRTEFloat32;
-	if(!m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat32)
+	m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat64 = m_featureControl.deviceExtensions.shader_float_controls && pfcp.shaderRoundingModeRTEFloat64;
+	if (!m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat16 &&
+		!m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat32 &&
+		!m_featureControl.shaderFloatControls.shaderRoundingModeRTEFloat64)
 		cemuLog_log(LogType::Force, "Shader round mode control not available on this device or driver. Some rendering issues might occur.");
 
 	if (!m_featureControl.deviceExtensions.pipeline_creation_cache_control)
@@ -661,9 +665,8 @@ VulkanRenderer::VulkanRenderer() : Renderer(RendererAPI::Vulkan)
 		cemuLog_log(LogType::Force, "Install the privateapi variant of MoltenVK to get logicOp support on macOS");
 #endif
 	}
-#if !BOOST_OS_MACOS
-	deviceFeatures.geometryShader = VK_TRUE;
-#endif
+	deviceFeatures.geometryShader = deviceFeatures2.features.geometryShader;
+	m_geometryShaderEnabled = deviceFeatures.geometryShader == VK_TRUE;
 	deviceFeatures.occlusionQueryPrecise = VK_TRUE;
 	deviceFeatures.depthClamp = VK_TRUE;
 	deviceFeatures.depthBiasClamp = VK_TRUE;
@@ -1345,12 +1348,6 @@ VkDeviceCreateInfo VulkanRenderer::CreateDeviceCreateInfo(const std::vector<VkDe
 	createInfo.ppEnabledExtensionNames = used_extensions.data();
 
 	createInfo.pNext = deviceExtensionStructs;
-
-	if (!m_layerNames.empty())
-	{
-		createInfo.enabledLayerCount = m_layerNames.size();
-		createInfo.ppEnabledLayerNames = m_layerNames.data();
-	}
 
 	return createInfo;
 }
@@ -3218,7 +3215,9 @@ void VulkanRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutpu
 	VkMemoryBarrier memoryBarrier{};
 	memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
 	VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-	VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+	VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+	if (m_geometryShaderEnabled)
+		dstStage |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
 	memoryBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
 	memoryBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
 	vkCmdPipelineBarrier(m_state.currentCommandBuffer, srcStage, dstStage, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);

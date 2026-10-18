@@ -263,8 +263,10 @@ struct LatteDecompilerOptions
 	bool useTFViaSSBO{ false };
 	struct
 	{
+		bool hasRoundingModeRTEFloat16{ false };
 		bool hasRoundingModeRTEFloat32{ false };
-	}spirvInstrinsics;
+		bool hasRoundingModeRTEFloat64{ false };
+	} spirvInstrinsics;
 };
 
 struct LatteDecompilerOutput_t

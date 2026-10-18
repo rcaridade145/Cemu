@@ -305,12 +305,18 @@ namespace LatteDecompiler
 		{
 			src->add("#define GET_FRAGCOORD() vec4(gl_FragCoord.xy*uf_fragCoordScale.xy,gl_FragCoord.z, 1.0/gl_FragCoord.w)" _CRLF);
 		}
-		if (decompilerContext->options->spirvInstrinsics.hasRoundingModeRTEFloat32)
+		const auto& spirvInstrinsics = decompilerContext->options->spirvInstrinsics;
+		if (spirvInstrinsics.hasRoundingModeRTEFloat16 ||
+			spirvInstrinsics.hasRoundingModeRTEFloat32 ||
+			spirvInstrinsics.hasRoundingModeRTEFloat64)
 		{
 			src->add("#extension GL_EXT_spirv_intrinsics: enable" _CRLF);
-			src->add("spirv_execution_mode(capabilities = [4467], extensions = [\"SPV_KHR_float_controls\"], 4462, 16);" _CRLF);
-			src->add("spirv_execution_mode(capabilities = [4467], extensions = [\"SPV_KHR_float_controls\"], 4462, 32);" _CRLF);
-			src->add("spirv_execution_mode(capabilities = [4467], extensions = [\"SPV_KHR_float_controls\"], 4462, 64);" _CRLF);
+			if (spirvInstrinsics.hasRoundingModeRTEFloat16)
+				src->add("spirv_execution_mode(capabilities = [4467], extensions = [\"SPV_KHR_float_controls\"], 4462, 16);" _CRLF);
+			if (spirvInstrinsics.hasRoundingModeRTEFloat32)
+				src->add("spirv_execution_mode(capabilities = [4467], extensions = [\"SPV_KHR_float_controls\"], 4462, 32);" _CRLF);
+			if (spirvInstrinsics.hasRoundingModeRTEFloat64)
+				src->add("spirv_execution_mode(capabilities = [4467], extensions = [\"SPV_KHR_float_controls\"], 4462, 64);" _CRLF);
 		}
 		src->add("#else" _CRLF);
 		// OpenGL defines
@@ -430,6 +436,15 @@ namespace LatteDecompiler
 	void _emitMisc(LatteDecompilerShaderContext* decompilerContext)
 	{
 		auto src = decompilerContext->shaderSource;
+		if (decompilerContext->shaderType == LatteConst::ShaderType::Geometry)
+		{
+			src->add("#ifdef VULKAN" _CRLF);
+			src->add("in gl_PerVertex" _CRLF);
+			src->add("{" _CRLF);
+			src->add("	vec4 gl_Position;" _CRLF);
+			src->add("} gl_in[];" _CRLF);
+			src->add("#endif" _CRLF);
+		}
 		// per-vertex output (VS or GS)
 		if ((decompilerContext->shaderType == LatteConst::ShaderType::Vertex && !decompilerContext->options->usesGeometryShader) ||
 			(decompilerContext->shaderType == LatteConst::ShaderType::Geometry))

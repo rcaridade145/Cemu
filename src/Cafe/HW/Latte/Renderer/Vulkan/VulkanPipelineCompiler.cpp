@@ -23,6 +23,7 @@ RendererShaderVk* rectsEmulationGS_generate(LatteDecompilerShader* vertexShader,
 	gsSrc.append("layout(triangles) in;\r\n");
 	gsSrc.append("layout(triangle_strip) out;\r\n");
 	gsSrc.append("layout(max_vertices = 4) out;\r\n");
+	gsSrc.append("in gl_PerVertex { vec4 gl_Position; } gl_in[];\r\n");
 
 	// inputs & outputs
 	auto parameterMask = vertexShader->outputParameterMask;
