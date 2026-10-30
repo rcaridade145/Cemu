@@ -54,10 +54,7 @@ namespace H264
 
 		~H264AVCDecoder()
 		{
-			m_threadShouldExit = true;
-			m_decodeSem.increment();
-			if (m_decoderThread.joinable())
-				m_decoderThread.join();
+			Destroy();
 		}
 
 	static const char* NALName(uint8_t type)
@@ -210,6 +207,10 @@ static bool ContainsIDR(const uint8_t* data, uint32_t len)
 
 		void Destroy()
 		{
+			m_threadShouldExit = true;
+			m_decodeSem.increment();
+			if (m_decoderThread.joinable())
+				m_decoderThread.join();
 			if (!m_codecCtx)
 				return;
 			ih264d_delete_ip_t s_delete_ip{ 0 };
@@ -692,6 +693,8 @@ restart_decode:
 			while(!m_threadShouldExit)
 			{
 				m_decodeSem.decrementWithWait();
+				if (m_threadShouldExit)
+					break;
 				std::unique_lock _l(m_decodeQueueMtx);
 				if (m_decodeQueue.empty())
 					continue;
