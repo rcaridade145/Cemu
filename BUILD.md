@@ -252,6 +252,20 @@ Example usage: `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -DENABLE_SDL=ON -
 | ENABLE_WXWIDGETS   |   | Enable wxWidgets UI                                                         | ON      | Currently required |
 | ENABLE_LIBUSB      |   | Enable libusb                                                               | ON      |                    |
 
+### H.264 decoder backend
+
+The default `edge264` backend can be changed to FFmpeg at configure time with
+`-DCEMU_H264_BACKEND=ffmpeg`. The FFmpeg backend decodes the base/2D view and
+produces the same 8-bit 4:2:0 output layout as the existing backend. With
+vcpkg, enable its optional dependency feature when configuring:
+
+```
+cmake -S . -B build -DCEMU_H264_BACKEND=ffmpeg -DVCPKG_MANIFEST_FEATURES=ffmpeg-h264
+```
+
+For builds without vcpkg, install the FFmpeg development libraries (libavcodec
+and libavutil) and configure with `-DENABLE_VCPKG=OFF`.
+
 ### Windows
 | Flag               | Description                       | Default | Note               |
 |--------------------|-----------------------------------|---------|--------------------|

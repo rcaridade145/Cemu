@@ -59,6 +59,21 @@ project(Cemu VERSION 2.0.0)
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
+set(CEMU_H264_BACKEND "edge264" CACHE STRING "H.264 software decoder backend (edge264 or ffmpeg)")
+set_property(CACHE CEMU_H264_BACKEND PROPERTY STRINGS edge264 ffmpeg)
+if(NOT CEMU_H264_BACKEND STREQUAL "edge264" AND NOT CEMU_H264_BACKEND STREQUAL "ffmpeg")
+	message(FATAL_ERROR "Unsupported CEMU_H264_BACKEND '${CEMU_H264_BACKEND}'. Choose edge264 or ffmpeg.")
+endif()
+if(CEMU_H264_BACKEND STREQUAL "ffmpeg")
+	if(ENABLE_VCPKG)
+		find_package(FFMPEG REQUIRED)
+	else()
+		find_package(PkgConfig REQUIRED)
+		pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil)
+	endif()
+	add_compile_definitions(CEMU_H264_BACKEND_FFMPEG)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -252,18 +267,20 @@ if (ENABLE_CUBEB)
 	add_compile_definitions("HAS_CUBEB=1")
 endif()
 
-add_library(edge264mvc STATIC dependencies/edge264-mvc/src/edge264mvc.c)
-target_include_directories(edge264mvc PUBLIC dependencies/edge264-mvc)
-target_link_libraries(edge264mvc PRIVATE Threads::Threads)
-set_target_properties(edge264mvc PROPERTIES
-	C_STANDARD 11
-	C_STANDARD_REQUIRED ON
-	C_EXTENSIONS ON
-)
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-	target_compile_options(edge264mvc PRIVATE -O3 -fwrapv -flax-vector-conversions -Wno-override-init)
+if(CEMU_H264_BACKEND STREQUAL "edge264")
+	add_library(edge264mvc STATIC dependencies/edge264-mvc/src/edge264mvc.c)
+	target_include_directories(edge264mvc PUBLIC dependencies/edge264-mvc)
+	target_link_libraries(edge264mvc PRIVATE Threads::Threads)
+	set_target_properties(edge264mvc PROPERTIES
+		C_STANDARD 11
+		C_STANDARD_REQUIRED ON
+		C_EXTENSIONS ON
+	)
+	if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+		target_compile_options(edge264mvc PRIVATE -O3 -fwrapv -flax-vector-conversions -Wno-override-init)
+	endif()
+	add_library(edge264mvc::edge264mvc ALIAS edge264mvc)
 endif()
-add_library(edge264mvc::edge264mvc ALIAS edge264mvc)
 
 if (CMAKE_OSX_ARCHITECTURES)
 	set(CEMU_ARCHITECTURE ${CMAKE_OSX_ARCHITECTURES})

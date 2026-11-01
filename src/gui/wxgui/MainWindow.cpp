@@ -2042,6 +2042,18 @@ public:
 			lineSizer->Add(new wxStaticText(parent, wxID_ANY, ")"));
 			sizer->Add(lineSizer);
 		}
+#ifdef CEMU_H264_BACKEND_FFMPEG
+		// FFmpeg
+		{
+			wxSizer* lineSizer = new wxBoxSizer(wxHORIZONTAL);
+			lineSizer->Add(new wxStaticText(parent, wxID_ANY, "FFmpeg ("));
+			lineSizer->Add(new wxHyperlinkCtrl(parent, wxID_ANY, "Source", "https://ffmpeg.org/", wxDefaultPosition, wxDefaultSize, (wxHL_CONTEXTMENU|wxNO_BORDER|wxHL_ALIGN_LEFT)));
+			lineSizer->Add(new wxStaticText(parent, wxID_ANY, " "));
+			lineSizer->Add(new wxHyperlinkCtrl(parent, wxID_ANY, "License", "https://ffmpeg.org/legal.html", wxDefaultPosition, wxDefaultSize, (wxHL_CONTEXTMENU|wxNO_BORDER|wxHL_ALIGN_LEFT)));
+			lineSizer->Add(new wxStaticText(parent, wxID_ANY, ")"));
+			sizer->Add(lineSizer);
+		}
+#else
 		// edge264-mvc
 		{
 			wxSizer* lineSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -2094,6 +2106,7 @@ public:
 			lineSizer->Add(new wxStaticText(parent, wxID_ANY, ")"));
 			sizer->Add(lineSizer);
 		}
+#endif
 	}
 
 	void AddThanks(wxWindow* parent, wxSizer* sizer)

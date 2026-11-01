@@ -69,6 +69,20 @@
     },
     "libusb"
   ],
+  "features": {
+    "ffmpeg-h264": {
+      "description": "Enable the FFmpeg H.264 decoding backend",
+      "dependencies": [
+        {
+          "name": "ffmpeg",
+          "default-features": false,
+          "features": [
+            "avcodec"
+          ]
+        }
+      ]
+    }
+  },
   "overrides": [
     {
       "name": "glslang",

@@ -1,3 +1,9 @@
+if(CEMU_H264_BACKEND STREQUAL "ffmpeg")
+  set(H264_DECODER_BACKEND_SOURCE OS/libs/h264_avc/H264DecBackendffmpeg.cpp)
+else()
+  set(H264_DECODER_BACKEND_SOURCE OS/libs/h264_avc/H264DecBackendAVC.cpp)
+endif()
+
 add_library(CemuCafe
   Account/Account.cpp
   Account/AccountError.h
@@ -337,7 +343,7 @@ add_library(CemuCafe
   OS/libs/gx2/GX2_Texture.h
   OS/libs/gx2/GX2_TilingAperture.cpp
   OS/libs/h264_avc/H264Dec.cpp
-  OS/libs/h264_avc/H264DecBackendAVC.cpp
+  ${H264_DECODER_BACKEND_SOURCE}
   OS/libs/h264_avc/h264dec.h
   OS/libs/h264_avc/H264DecInternal.h
   OS/libs/h264_avc/parser
@@ -652,12 +658,21 @@ target_link_libraries(CemuCafe PRIVATE
   pugixml::pugixml
   ZLIB::ZLIB
   CURL::libcurl
-  edge264mvc::edge264mvc
   zstd::zstd
   ${glslang_target}
   PUBLIC
   OpenSSL::SSL
 )
+
+if(CEMU_H264_BACKEND STREQUAL "edge264")
+	target_link_libraries(CemuCafe PRIVATE edge264mvc::edge264mvc)
+elseif(ENABLE_VCPKG)
+	target_include_directories(CemuCafe PRIVATE ${FFMPEG_INCLUDE_DIRS})
+	target_link_directories(CemuCafe PRIVATE ${FFMPEG_LIBRARY_DIRS})
+	target_link_libraries(CemuCafe PRIVATE ${FFMPEG_LIBRARIES})
+else()
+	target_link_libraries(CemuCafe PRIVATE PkgConfig::FFMPEG)
+endif()
 
 if (ENABLE_WAYLAND)
 	# PUBLIC because wayland-client.h is included in VulkanAPI.h
