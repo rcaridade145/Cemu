@@ -1,0 +1,213 @@
+# liveness fixtures: <name> <expected base-view frames> [<expected rejected NALs> [<base-view hash>]]
+# Each fixture is decoded the way a player does: a NAL the decoder rejects
+# (CORRUPT, UNSUPPORTED) is skipped, and the stream is always ended and drained.
+# A decode that aborts on an assert or crashes FAILs as "crashed".
+# mvc_unpaired_base: MVCDS-4 with one dependent-view (NAL type 20) slice removed,
+# so one base frame has no POC-matching dependent. A correct decoder emits that
+# base frame alone (9 total) instead of deadlocking. Regression (M1) => stall.
+mvc_unpaired_base 9
+# mvc_unpaired_base_eos: mvc_unpaired_base with a trailing end_of_sequence NAL
+# (type 10) appended (tests/gen_mvc_unpaired_base_eos.py). Same unpaired base,
+# but now the decoder reaches it at an end_of_sequence rather than at the buffer
+# end (buf >= end) - the point a multi-clip 3D player hits when a clip terminates
+# on its end_of_seq unit. parse_end_of_sequence must set the same flushing valve
+# that end-of-buffer does, or the held unpairable base is never emitted and the
+# draining caller spins ENOBUFS forever, losing the last base frame. A correct
+# decoder flushes it and delivers all 9. Regression (end_of_sequence flush) =>
+# stall (8 of 9).
+mvc_unpaired_base_eos 9
+# dpb_frame_num_gap: a frame_num gap where every reference slot is long-term; the
+# picture after the gap is rejected (1 NAL) and the picture before it delivered (1).
+dpb_frame_num_gap 1 1
+# tall_progressive: a 1x540-MB (16x8640px) progressive IDR. The SPS height bound
+# "527 << frame_mbs_only_flag" is read before the flag is parsed (always 527),
+# clamping progressive height at 528 rows and stalling the DPB. ffmpeg decodes
+# the full frame; edge264 must emit it (1 frame) too. Regression (L2) => stall.
+tall_progressive 1
+# zero_ref_idr: a synthetic (gen_avc.py) single all-intra IDR whose SPS carries
+# max_num_ref_frames=0, yet its IDR is a reference picture (nal_ref_idc>0) and
+# marks itself short-term (8.2.5.1). The lone self-reference exceeded the zero
+# limit and aborted a C.4.5 invariant assert. A correct decoder floors the ref
+# count and emits the frame (1). ffmpeg decodes it; edge264 must too. Regression
+# (zero-ref) => abort ("crashed") instead of delivering the frame.
+zero_ref_idr 1
+# dpb_overflow: a synthetic IDR whose SPS signals level 1.0 (MaxDpbMbs 396) but a
+# 20x20 = 400-MB frame, so the inferred MaxDpbFrames = 396/400 = 0 and thus
+# max_dec_frame_buffering = 0. The lone reference IDR occupies one DPB slot, so
+# 1 > 0 tripped the C.4.5 fullness assert (edge264mvc_headers.c:1245) during slice-
+# header parsing. A correct decoder floors the derived DPB size at the reference
+# count and emits the frame (1). ffmpeg decodes it. Regression (DPB-buffering
+# floor) => abort ("crashed").
+dpb_overflow 1
+# incomplete_frame: a synthetic IDR whose SPS declares a 2-MB picture but whose
+# only slice carries just 1 macroblock, so the picture never completes
+# (remaining_mbs > 0, next_deblock_addr stays != INT_MAX). At end-of-stream
+# get_frame used to skip the unfinished picture forever while bump_all_frames
+# kept returning ENOBUFS - a deadlock a draining caller cannot escape. The fix
+# emits the partial picture while flushing (like the MVC unpaired-base valve),
+# so the decoder makes forward progress and delivers it (1). Mirrors real
+# captured TS/M2TS clips truncated mid-frame, which ffmpeg also emits + terminates
+# on. Regression (end-of-stream forward progress) => stall.
+incomplete_frame 1
+# vui_overread: a synthetic SPS whose VUI over-reads past the SPS rbsp (the SPS
+# NAL's last 2 bytes are trimmed after generation, mimicking a common encoder bug
+# ffmpeg reports as "Overread VUI by N bits" and tolerates). The strict
+# rbsp_trailing_bits check used to reject the whole SPS with EBADMSG, dropping the
+# entire stream (0 frames). Since the VUI is the last, non-normative element and
+# every decoding-relevant field before it is already parsed and bounds-checked,
+# the fix accepts the SPS (reverting the VUI's two values to the inferred
+# defaults) and decodes the IDR (1 frame). Real captures hit this (a Main and a
+# High clip in a sweep, both flagged "Overread VUI by 8 bits" by ffmpeg too).
+# Regression (VUI-overread SPS tolerance) => EBADMSG / 0 frames.
+vui_overread 1
+# cabac_overread: 24 single-MB I_PCM pictures (synthetic CABAC, gen_cabac_overread.py).
+# Each slice decodes its whole picture, but raw 0xFF bytes after the PCM samples leave the
+# re-initialised cabac engine with offset >= range (end_of_slice = 1) AND a non-zero
+# msb_cache - the look-ahead state a dense final slice leaves when its data fills the NAL.
+# The strict cabac end check then tripped EBADMSG on these COMPLETE slices, so their
+# remaining_mbs was never zeroed and the pictures never finalized. They pile up undelivered
+# until the DPB overflows and the decoder spins ENOBUFS mid-stream (before end-of-stream, so
+# the EOS forward-progress valve cannot mask it). A correct decoder ignores the look-ahead
+# slop on a slice that decoded every macroblock and emits all 24. ffmpeg decodes them too.
+# Regression (cabac end-of-slice over-read tolerance) => mid-stream stall.
+cabac_overread 24
+# cabac_orphan: an IDR then 23 single-MB-per-picture frames (synthetic CABAC,
+# gen_cabac_orphan.py), where picture 1 codes only 1 of its 2 macroblocks (a slice
+# that ends via end_of_slice mid-picture) so it never finalizes - the state a
+# corrupt stream leaves when a slice errors mid-frame. The SPS sets
+# max_num_reorder_frames = 0 so complete pictures are output immediately; the held
+# incomplete picture (lowest POC, skipped by get_frame mid-stream) is bumped into
+# the 16-entry queue and then shifted out by the later bumps without being
+# delivered. Orphaned (in to_get_frames but absent from the queue), it made
+# bump_all_frames spin ENOBUFS forever at end-of-stream, so the decoder delivered
+# 23 of 24 and stalled. The fix finalizes and re-queues the orphan so all 24 come
+# out (ffmpeg conceals + emits the damaged picture too). Found on a real corrupt
+# broadcast capture. Regression (flush-drain orphan
+# recovery) => stall losing the last picture.
+cabac_orphan 24
+# cabac_misalign: 24 single-MB I_PCM pictures (synthetic CABAC, gen_cabac_misalign.py)
+# whose slice headers pad cabac_alignment_one_bit with ZEROS instead of ones. That
+# padding is non-normative (ffmpeg does not verify it, just byte-aligns), but
+# edge264's cabac_start rejected a non-1 padding with EBADMSG, decoding 0 macroblocks;
+# the undelivered pictures then piled up until the DPB overflowed into a mid-stream
+# stall. The fix accepts the byte-aligned position regardless, so every picture
+# decodes (the CABAC data is byte-aligned and valid). Found on a real Extended-profile
+# capture whose every slice was rejected (a stall at 0 frames; it now decodes like
+# ffmpeg). Regression (cabac_alignment leniency) => mid-stream stall, 0 frames.
+cabac_misalign 24
+# mvc_orphan_dependent: a 2-access-unit MVC stream (gen_avc.py) whose second access
+# unit carries only the dependent view (NAL type 20); its base view is absent (a
+# dropped/corrupt base NAL on a damaged 3D stream). The mirror of mvc_unpaired_base
+# above: there the dependent was missing, here the base is. The dependent has no base
+# to pair with and is never scanned for output (only base frames drive get_frame), so
+# it lingered in the output queue until the DPB filled and the decoder spun ENOBUFS at
+# end-of-stream. The fix drops the orphan dependent - clearing it from to_get_frames
+# AND output_frames (both set when the frame was bumped) - so the decoder emits the
+# first access unit's stereo pair (1) and terminates. ffmpeg ignores the dependent
+# view of such an access unit too. Regression (orphan-dependent valve) => stall.
+mvc_orphan_dependent 1
+# mvc_smallres_dpb_stall: a 1x1-macroblock two-view MVC stream of 20 access units
+# (gen_avc.py from tests/gen_mvc_smallres_stall.py). A tiny picture infers a large
+# reorder/DPB window (MaxDpbMbs / PicSizeInMbs, capped at 16), so the per-view
+# fullness bump (bump_frame) queues a base into get_frame_queue[0] while its
+# already-decoded dependent still sits unbumped in to_get_frames; the scan there
+# misses it and the dependent-in-flight guard then holds the base, so the DPB fills
+# and the decoder spins ENOBUFS at 0 frames. The fix bumps the decoded dependent
+# into get_frame_queue[1] so the pair is emitted together. Regression => stall, 0.
+mvc_smallres_dpb_stall 20
+# mvc_baseless_dependent: a subset SPS (NAL type 15) and inter-coded dependent-view
+# slices (NAL type 20, P) with NO base-view SPS (type 7) and no base-view slices at
+# all - the signature of a stream whose base view is undecodable (from FFmpeg's
+# 3D/AVC_codec_in_m2ts_not_recognized sample; ffmpeg reports "sps_id out of range",
+# width=0/height=0, no frame). With no base picture (basePic stays -1) each dependent
+# P slice's inter-view reference falls back to its own not-yet-decoded frame slot, so
+# its decode task depends on its own frame. Multithreaded, that dependency never
+# clears: the worker never runs the task and the frame never completes. One picture is
+# split into 18 single-MB slices (> the 16 task slots) so the self-dependent tasks
+# exhaust the pool and the parser blocks forever waiting for a free slot -
+# decode_nal never returns (a hard deadlock, not an ENOBUFS spin, so only the
+# forked-child timeout catches a regression). The fix rejects each base-less
+# inter-coded dependent slice as corrupt (EBADMSG) and delivers 0 frames, like ffmpeg:
+# all 18 slices are rejected. Generated by tests/gen_mvc_baseless.py. Regression =>
+# deadlock (decode_NAL hangs).
+mvc_baseless_dependent 0 18
+# mvc_gop16_dpb_{cabac,cavlc}: a 2-view MVC stream with a GOP16 hierarchical-B pyramid
+# (JMVC reference encoder, 208x160, 32 access units). Both views fill their reference
+# set (max_num_ref_frames 8 per view), so the two view queues together hold more than
+# the old combined "queued0 + queued1 + pending <= 16" output-buffer gate allowed -
+# that gate halved the per-view get_frame_queue capacity for MVC, left no room past
+# the (equally large) reorder window, and deadlocked: every thread parked with the
+# output queue unable to drain (issue #2). Debug builds aborted even earlier on the
+# C.4.5 fullness assert, which the two view reference sets legitimately exceed. The
+# fix gates the output buffer per view and bounds the assert by the 32 physical DPB
+# slots. A correct decoder delivers all 32 base-view frames, POC-paired and in display
+# order; regression => deadlock (MT) or abort (debug). Both entropy coders are pinned
+# since the stall is in the shared DPB/output path, not the slice decoder.
+mvc_gop16_dpb_cabac 32
+mvc_gop16_dpb_cavlc 32
+
+# mvc_orphan_dep_tail: a two-view body (1 stereo IDR + 3 stereo P AUs, 16x16 MBs)
+# followed by 32 dependent-view-only tail AUs (no base view) - the shape a
+# byte-trimmed 3D-BD SSIF leaves behind (its chunked interleaving ends with a
+# surplus of dependent AUs past the last base AU; an unequal-length two-file
+# base+dependent feed produces the same). Generated by tests/gen_mvc_orphan_tail.py.
+# Under multithreading, get_frame's orphan-dependent valve used to drop such a
+# dependent while its decode tasks were still running (or while it was still being
+# parsed); the parser then reallocated the freed DPB slot and the stale tasks'
+# remaining_mbs subtractions corrupted the new occupant's counter - the frame never
+# finalized, dependent tasks piled up, and once all 16 task slots filled the parser
+# deadlocked inside decode_nal (0% CPU; ~97% repro rate on this fixture
+# pre-fix, occasionally a crash instead). The fix defers the drop until the
+# dependent has no in-flight tasks and additionally bars the slot allocator from
+# handing out any slot still written by a busy task. Expected: the 4 body stereo
+# pairs; every tail dependent is dropped (no base to pair with), like ffmpeg.
+# Regression (orphan-drop guard or allocator in-flight guard) => deadlock/crash (MT).
+mvc_orphan_dep_tail 4
+
+# incomplete_ref_dependency: a 17-MB reference IDR whose only slice ends after
+# one MB, followed by 17 one-MB P slices that all reference it. The incomplete
+# IDR has no task left that can finalize it; under multithreading the first 16 P
+# tasks fill the fixed pool, all remain pending on that IDR, and the parser
+# blocks reserving the 17th while every worker sleeps. Generated with width 17
+# by tests/gen_incomplete_ref_dependency.py. Regression => decode_NAL deadlock.
+incomplete_ref_dependency 2
+
+# incomplete_ref_dependency_eos: the same permanent dependency with only ten P
+# tasks. The pool does not saturate, so the deadlock surfaces in EOS/flush while
+# waiting for busy_tasks to drain. Generated with width 10. Regression => flush
+# deadlock (the synchronous path's existing no-ready-task safety net passes).
+incomplete_ref_dependency_eos 2
+# mvc_truncated_dependent: MVCDS-4 cut in the middle of its last dependent-view
+# (NAL type 20) slice, as a capture truncated mid-picture leaves it. The last
+# dependent picture never completes, and get_frame held its complete base for
+# it forever while the end-of-stream drain returned ENOBUFS without end. A
+# correct decoder conceals the incomplete picture at the flush and emits all 9
+# frames, the same single- and multithreaded. Regression => stall.
+mvc_truncated_dependent 9
+# self_reference: tests/asan/reflist_oob.264 under the liveness harness. Its
+# leading B slice has no reference picture, and the out-of-range RefPicList
+# fix-up used to substitute slot 0 - the current picture itself. Single-threaded
+# that read its own undecoded samples; multithreaded the task waited forever on
+# its own progress (no frame, then a stall). A correct decoder rejects the slice
+# (no frame, 1 NAL rejected) and terminates. Regression => stall.
+self_reference 0 1
+# reordered_damaged_slices: one IDR picture of ten one-row slices sent in the order
+# 1..9, 0 with slices 1..9 truncated (tests/gen_reordered_damaged_slices.py). Each
+# damaged slice waited for its turn behind slice 0, which arrived after it; with 8
+# worker threads all of them waited while none was left to decode slice 0, so
+# send_nal never returned. A correct decoder conceals the picture and delivers it (1).
+# Regression => deadlock under EDGE264MVC_THREADS=8.
+reordered_damaged_slices 1
+# mvc_requeue_dependent: 8 paired reference access units, 16 base pictures without
+# dependent view, an access unit whose dependent view comes first and fills the last
+# free DPB slot, then 20 base pictures (tests/gen_mvc_requeue_dependent.py). A draining
+# caller must get all 45 base frames; tests/partial_receive_check.c also decodes it with
+# a caller receiving one frame per round.
+mvc_requeue_dependent 45
+# rejected_first_slice: a reference P picture of two slices whose first slice is
+# rejected before its reference marking (a reference list modification naming a
+# missing picture) - tests/gen_rejected_first_slice.py. The second slice belongs to
+# the same picture (7.4.1.2.4); taken for a new picture, it was decoded into a picture
+# of the same POC that never came out, so the picture after it predicted from a
+# fully concealed one. The hash pins the decoded bottom half in both pictures.
+rejected_first_slice 3 1 40d5742d25259b25

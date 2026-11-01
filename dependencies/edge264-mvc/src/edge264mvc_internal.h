@@ -1,0 +1,1955 @@
+/**
+ * Every file should be compilable on its own by including this file.
+ */
+
+#ifndef EDGE264MVC_INTERNAL_H
+#define EDGE264MVC_INTERNAL_H
+
+#include <assert.h>
+#include <errno.h>
+#include <limits.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#ifdef _WIN32
+	#include <processthreadsapi.h>
+	#include <profileapi.h> // QueryPerformanceCounter/Frequency for get_relative_time_us
+	#define ssize_t ptrdiff_t
+#endif
+#if defined(_WIN32) && !defined(EDGE264MVC_WINPTHREADS)
+	// reason: winpthreads' mutexes and condition variables wait on kernel
+	// events, while Windows' slim reader/writer locks and condition variables
+	// stay in user mode unless they must sleep (FFmpeg maps them the same way).
+	// Only the calls the decoder makes are mapped, with their pthread names.
+	#include <windows.h>
+	#include <process.h>
+	#undef min
+	#undef max
+	typedef SRWLOCK pthread_mutex_t;
+	typedef CONDITION_VARIABLE pthread_cond_t;
+	typedef HANDLE pthread_t;
+	static inline int pthread_mutex_init(pthread_mutex_t *m, const void *attr) { (void)attr; InitializeSRWLock(m); return 0; }
+	static inline int pthread_mutex_destroy(pthread_mutex_t *m) { (void)m; return 0; }
+	static inline int pthread_mutex_lock(pthread_mutex_t *m) { AcquireSRWLockExclusive(m); return 0; }
+	static inline int pthread_mutex_unlock(pthread_mutex_t *m) { ReleaseSRWLockExclusive(m); return 0; }
+	static inline int pthread_cond_init(pthread_cond_t *c, const void *attr) { (void)attr; InitializeConditionVariable(c); return 0; }
+	static inline int pthread_cond_destroy(pthread_cond_t *c) { (void)c; return 0; }
+	static inline int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) { return SleepConditionVariableSRW(c, m, INFINITE, 0) ? 0 : EINVAL; }
+	static inline int pthread_cond_signal(pthread_cond_t *c) { WakeConditionVariable(c); return 0; }
+	static inline int pthread_cond_broadcast(pthread_cond_t *c) { WakeAllConditionVariable(c); return 0; }
+	typedef struct { void *(*fn)(void *); void *arg; } Edge264MvcThreadStart;
+	static inline unsigned __stdcall edge264mvc_thread_start(void *p) {
+		Edge264MvcThreadStart s = *(Edge264MvcThreadStart *)p;
+		free(p);
+		s.fn(s.arg);
+		return 0;
+	}
+	static inline int pthread_create(pthread_t *t, const void *attr, void *(*fn)(void *), void *arg) {
+		(void)attr;
+		Edge264MvcThreadStart *s = malloc(sizeof(*s));
+		if (s == NULL)
+			return EAGAIN;
+		s->fn = fn;
+		s->arg = arg;
+		if ((*t = (HANDLE)_beginthreadex(NULL, 0, edge264mvc_thread_start, s, 0, NULL)) == NULL) {
+			free(s);
+			return EAGAIN;
+		}
+		return 0;
+	}
+	static inline int pthread_join(pthread_t t, void **ret) {
+		(void)ret;
+		WaitForSingleObject(t, INFINITE);
+		CloseHandle(t);
+		return 0;
+	}
+#else
+	#include <pthread.h>
+#endif
+#ifndef _WIN32
+	#include <unistd.h>
+	#include <sys/resource.h>
+#endif
+
+// Automatic selection of SIMD backend if not defined by environment
+#define SSE 1
+#define NEON 2
+#define WASM 3
+#define CLANG 4
+#ifndef SIMD
+	#if defined(__wasm_simd128__) // placed first to favor explicit WASM by default over SSE/NEON-inferred
+		#define SIMD WASM
+	#elif defined(__SSE2__)
+		#define SIMD SSE
+	#elif defined(__ARM_NEON)
+		#define SIMD NEON
+	#elif defined(__clang__)
+		#define SIMD CLANG
+	#else
+		#error "No supported vector intrinsics found (SSE, NEON, WASM, clang)"
+	#endif
+#endif
+#if SIMD == SSE
+	#include <immintrin.h>
+#elif SIMD == NEON
+	#include <arm_neon.h>
+#elif SIMD == WASM
+	#include <wasm_simd128.h>
+#endif
+
+#include "../edge264mvc.h"
+
+// Internal decoder types, formerly the public API of edge264
+typedef void (*Edge264MvcUnrefCb)(int ret, void *unref_arg);
+typedef void (*Edge264MvcAllocCb)(void **samples, unsigned samples_size, void **mbs, unsigned mbs_size, void *alloc_arg);
+typedef void (*Edge264MvcFreeCb)(void *samples, void *mbs, void *alloc_arg);
+typedef struct Edge264MvcOutput {
+	const uint8_t *samples[3]; // Y/Cb/Cr planes
+	const uint8_t *samples_mvc[3]; // second view
+	const uint8_t *mb_errors; // unused, always NULL
+	int8_t bit_depth_Y;
+	int8_t bit_depth_C;
+	int16_t width_Y;
+	int16_t width_C;
+	int16_t height_Y;
+	int16_t height_C;
+	int16_t stride_Y;
+	int16_t stride_C;
+	int16_t stride_mb;
+	int32_t FrameId;
+	int32_t FrameId_mvc; // second view
+	int32_t Poc;
+	int32_t Poc_mvc; // second view
+	int64_t DisplayPoc;
+	int64_t DisplayPoc_mvc; // second view
+	int16_t frame_crop_offsets[4]; // {top,right,bottom,left}
+	void *return_arg;
+} Edge264MvcOutput;
+
+
+
+typedef int8_t i8x4 __attribute__((vector_size(4)));
+typedef int8_t i8x8 __attribute__((vector_size(8)));
+typedef uint8_t u8x8 __attribute__((vector_size(8)));
+typedef int16_t i16x4 __attribute__((vector_size(8)));
+typedef uint16_t u16x4 __attribute__((vector_size(8)));
+typedef int32_t i32x2 __attribute__((vector_size(8)));
+typedef int8_t i8x16 __attribute__((vector_size(16)));
+typedef int16_t i16x8 __attribute__((vector_size(16)));
+typedef int32_t i32x4 __attribute__((vector_size(16)));
+typedef int64_t i64x2 __attribute__((vector_size(16)));
+typedef uint8_t u8x16 __attribute__((vector_size(16)));
+typedef uint16_t u16x8 __attribute__((vector_size(16)));
+typedef uint32_t u32x4 __attribute__((vector_size(16)));
+typedef uint64_t u64x2 __attribute__((vector_size(16)));
+typedef int8_t i8x32 __attribute__((vector_size(32))); // alignment for 256-bit extensions
+typedef int16_t i16x16 __attribute__((vector_size(32)));
+typedef uint16_t u16x16 __attribute__((vector_size(32)));
+typedef int32_t i32x8 __attribute__((vector_size(32)));
+typedef int32_t i32x16 __attribute__((vector_size(64))); // for initialization of neighbouring offsets
+
+
+
+/**
+ * Bitstream parsing context is put in a struct so that it can be included at
+ * the start of both stream and nal structures, thus their pointers can be sent
+ * to bitstream functions without offsets.
+ */
+typedef struct {
+	const uint8_t *CPB; // memory address of the next byte to load in caches
+	const uint8_t *end; // first byte past end of buffer, capped to 001 or 000 sequence when detected
+	union { size_t lsb_cache; size_t range; };
+	union { size_t msb_cache; size_t offset; };
+} Edge264MvcGetBits;
+
+
+
+/**
+ * Although we waste some space by storing some neighbouring values for more
+ * than their lifespans, packing everything in a single structure is arguably
+ * the simplest to maintain. Neighbouring values from the same or a different
+ * macroblock are obtained with memory offsets precomputed in ctx. With this
+ * technique we spare the use of intermediate caches thus reduce memory writes.
+ * 
+ * In 9.3.3.1.1, ctxIdxInc is always the result of flagA+flagB or flagA+2*flagB,
+ * so we use Edge264MvcMbFlags to pack flags together to allow adding them in
+ * parallel with flagsA + flagsB + (flagsB & twice).
+ * 
+ * CABAC bit values of 8x8 blocks are stored in compact 8-bit patterns that
+ * allow retrieving A+B*2 efficiently:
+ *   1 6
+ * 0|5 3
+ * 4|2 7
+ */
+typedef union {
+	struct {
+		int8_t mb_field_decoding_flag;
+		int8_t mb_skip_flag;
+		int8_t mb_type_I_NxN;
+		int8_t mb_type_B_Direct;
+		int8_t transform_size_8x8_flag;
+		int8_t intra_chroma_pred_mode_non_zero;
+		int8_t CodedBlockPatternChromaDC;
+		int8_t CodedBlockPatternChromaAC;
+		union { int8_t coded_block_flags_16x16[3]; int32_t coded_block_flags_16x16_s; };
+		union { uint8_t inter_eqs[4]; uint32_t inter_eqs_s; }; // 2 flags per 4x4 block storing right/bottom equality of mvs&ref, not part of ctxIdxInc but packed here to save space
+	};
+	i8x16 v;
+} Edge264MvcMbFlags;
+// unavailability of the neighbours of the 16 4x4 blocks of a macroblock, by the A/B/C/D
+// (bits 0-3) neighbouring macroblocks that are unavailable
+static const i8x16 block_unavailability[16] = {
+	{ 0,  0,  0,  4,  0,  0,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{ 1,  0,  9,  4,  0,  0,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+	{ 6, 14,  0,  4, 14, 10,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{ 7, 14,  9,  4, 14, 10,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+	{ 0,  0,  0,  4,  0,  4,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{ 1,  0,  9,  4,  0,  4,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+	{ 6, 14,  0,  4, 14, 14,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{ 7, 14,  9,  4, 14, 14,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+	{ 8,  0,  0,  4,  0,  0,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{ 9,  0,  9,  4,  0,  0,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+	{14, 14,  0,  4, 14, 10,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{15, 14,  9,  4, 14, 10,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+	{ 8,  0,  0,  4,  0,  4,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{ 9,  0,  9,  4,  0,  4,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+	{14, 14,  0,  4, 14, 14,  0,  4,  0,  0,  0,  4,  0,  4,  0,  4},
+	{15, 14,  9,  4, 14, 14,  0,  4,  9,  0,  9,  4,  0,  4,  0,  4},
+};
+static const Edge264MvcMbFlags flags_twice = {
+	.CodedBlockPatternChromaDC = 1,
+	.CodedBlockPatternChromaAC = 1,
+	.coded_block_flags_16x16 = {1, 1, 1},
+};
+/**
+ * The macroblock array of each frame keeps only the values read after the
+ * macroblock is parsed: by its neighbours, by deblocking (which may run long
+ * after, from another slice), by colocated motion prediction in other frames,
+ * and by error concealment. Its 192 bytes fill exactly 3 cache lines (the
+ * array is 64-byte aligned): flags and references, then the motion vectors of
+ * each list. The frames are written and read back while many others are
+ * decoded at once, so every byte here costs memory bandwidth.
+ */
+typedef struct {
+	int8_t error_probability; // 0..100, must be first for outside API
+	int8_t recovery_bits; // bit 0 is flipped for each new frame, bit 1 signals error
+	int8_t mbIsInterFlag;
+	int8_t filter_edges; // bits 0-1 enable deblocking of A/B edges, bit 2 signals that deblocking is pending
+	union { uint8_t QP[4]; i8x4 QP_s; }; // [iYCbCr], then FilterOffsetA / 2 and FilterOffsetB / 2 in 4 bits each
+	union { uint32_t bits[2]; uint64_t bits_l; }; // {cbp/ref_idx_nz, cbf_Y/Cb/Cr 8x8}
+	union { int8_t nC_Y[16]; i8x16 nC_Y_v; }; // copy of the luma nC for deblocking
+	// fields used by mbCol thus kept together for slice prefetching (do not reorder!)
+	Edge264MvcMbFlags f;
+	union { int8_t refIdx[8]; int32_t refIdx_s[2]; int64_t refIdx_l; }; // [LX][i8x8]
+	union { int8_t refPic[8]; int32_t refPic_s[2]; int64_t refPic_l; }; // [LX][i8x8]
+	union { int16_t mvs[64]; int32_t mvs_s[32]; int64_t mvs_l[16]; i16x8 mvs_v[8]; }; // [LX][i4x4][compIdx]
+} Edge264MvcMacroblock;
+_Static_assert(sizeof(Edge264MvcMacroblock) == 192, "Edge264MvcMacroblock should fill 3 cache lines");
+static Edge264MvcMacroblock unavail_mb = {
+	.f.mb_skip_flag = 1,
+	.f.mb_type_I_NxN = 1,
+	.f.mb_type_B_Direct = 1,
+	.refIdx = {-1, -1, -1, -1, -1, -1, -1, -1},
+	.refPic = {-1, -1, -1, -1, -1, -1, -1, -1}, // like an intra macroblock, so no slot is taken for its reference
+	.bits[0] = 0xac, // cbp
+};
+
+/**
+ * Values only read while parsing the macroblocks right of and below them in
+ * the same slice live in a per-thread ring of pic_width_in_mbs + 2 entries,
+ * indexed like the macroblock array (with its unavailable entry at the end of
+ * each row), so they stay in cache. Neighbour A is then at entry -1 and B at
+ * entry +1. The ring is preceded by a copy of its last entry and followed by
+ * a copy of its first entry, so that both offsets hold at its ends.
+ */
+typedef struct {
+	union { int8_t Intra4x4PredMode[16]; int32_t Intra4x4PredMode_s[4]; i8x16 Intra4x4PredMode_v; }; // [i4x4]
+	union { int8_t nC[48]; int32_t nC_s[12]; int64_t nC_l[6]; i8x16 nC_v[3]; }; // for CAVLC and CABAC
+	union { uint8_t absMvd[64]; uint64_t absMvd_l[8]; i8x16 absMvd_v[4]; }; // [LX][i4x4][compIdx]
+} Edge264MvcMbCache;
+static const Edge264MvcMbCache unavail_mbc = {
+	.Intra4x4PredMode = {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2},
+};
+
+
+
+/**
+ * Parameter sets are defined as structs so that we can parse them into
+ * temporary storage, then copy them into persistent context after
+ * trailing_bits are detected.
+ */
+typedef struct {
+	int8_t chroma_format_idc; // 0..3
+	int8_t ChromaArrayType; // 0..3
+	int8_t BitDepth_Y; // 8..14
+	int8_t BitDepth_C;
+	int8_t qpprime_y_zero_transform_bypass_flag; // 0..1
+	int8_t log2_max_frame_num; // 4..16
+	int8_t pic_order_cnt_type; // 0..2
+	int8_t log2_max_pic_order_cnt_lsb; // 4..16, pic_order_cnt_type==0
+	int8_t delta_pic_order_always_zero_flag; // 0..1, pic_order_cnt_type==1
+	uint8_t num_ref_frames_in_pic_order_cnt_cycle; // 0..255, pic_order_cnt_type==1
+	int8_t max_num_ref_frames; // 0..16
+	int8_t frame_mbs_only_flag; // 0..1
+	int8_t mb_adaptive_frame_field_flag; // 0..1
+	int8_t direct_8x8_inference_flag; // 0..1
+	int8_t max_dec_frame_buffering; // 0..16
+	int8_t max_num_reorder_frames; // 0..16
+	int8_t nal_hrd_cpb_cnt; // 1..32
+	int8_t vcl_hrd_cpb_cnt; // 1..32
+	int8_t initial_cpb_removal_delay_length; // 1..32
+	int8_t cpb_removal_delay_length; // 1..32
+	int8_t dpb_output_delay_length; // 1..32
+	int8_t time_offset_length; // 0..31
+	int8_t pic_struct_present_flag; // 0..1
+	int8_t seq_scaling_matrix_present_flag; // 0..1, selects the PPS scaling-list fall-back rule set (Table 7-2)
+	int16_t num_views; // 2..1024 (subset SPS)
+	uint16_t dependent_view_id; // 0..1023, view_id of the view with VOIdx 1, the one decoded besides the base view (subset SPS)
+	uint16_t pic_width_in_mbs; // 1..1023
+	int16_t pic_height_in_mbs; // 1..1055
+	int16_t offset_for_non_ref_pic; // -32768..32767, pic_order_cnt_type==1
+	int16_t offset_for_top_to_bottom_field; // -32768..32767, pic_order_cnt_type==1
+	int16_t PicOrderCntDeltas[255]; // -32768..32767, pic_order_cnt_type==1
+	uint32_t num_units_in_tick; // 0..2^32-1
+	uint32_t time_scale; // 0..2^32-1
+	union { int16_t frame_crop_offsets[4]; int64_t frame_crop_offsets_l; }; // {top,right,bottom,left}
+	union { uint8_t weightScale4x4[6][16]; i8x16 weightScale4x4_v[6]; };
+	union { uint8_t weightScale8x8[6][64]; i8x16 weightScale8x8_v[6*4]; };
+} Edge264MvcSeqParameterSet;
+typedef struct {
+	int8_t entropy_coding_mode_flag; // 0..1
+	int8_t bottom_field_pic_order_in_frame_present_flag; // 0..1
+	int8_t num_ref_idx_active[2]; // 1..32, non-zero if PPS has been initialized
+	int8_t weighted_pred_flag; // 0..1
+	int8_t weighted_bipred_idc; // 0..2
+	int8_t QPprime_Y; // 0..87
+	int8_t QSprime_Y; // 0..51, pic_init_qs_minus26 + 26 for SP slices
+	int8_t chroma_qp_index_offset; // -12..12
+	int8_t deblocking_filter_control_present_flag; // 0..1
+	int8_t constrained_intra_pred_flag; // 0..1
+	int8_t redundant_pic_cnt_present_flag; // 0..1, adds redundant_pic_cnt to every slice header (7.3.3)
+	int8_t transform_8x8_mode_flag; // 0..1
+	int8_t pic_scaling_matrix_present_flag; // 0..1
+	int8_t second_chroma_qp_index_offset; // -12..12
+	// slice groups (FMO, 7.4.2.2), with the explicit map of type 6 kept in the
+	// decoder (pps_slice_group_ids), as tasks copy the PPS
+	int8_t num_slice_groups; // 1..8
+	int8_t slice_group_map_type; // 0..6
+	int8_t slice_group_change_direction_flag; // 0..1
+	int32_t SliceGroupChangeRate; // 1..PicSizeInMapUnits
+	int32_t run_length_minus1[8]; // type 0
+	int32_t top_left[8], bottom_right[8]; // type 2
+	int32_t pic_size_in_map_units; // type 6
+	union { uint8_t weightScale4x4[6][16]; i8x16 weightScale4x4_v[6]; };
+	union { uint8_t weightScale8x8[6][64]; i8x16 weightScale8x8_v[6*4]; };
+} Edge264MvcPicParameterSet;
+
+
+
+/**
+ * Frame threading overlaps as many pictures as it has slots for them: a
+ * picture in flight holds a frame slot (beside the references and the pictures
+ * awaiting output) and a task slot, which it keeps while it waits on the
+ * progress of its references. So the slots, not the cores, bound how deep a
+ * chain of reference pictures pipelines, and a stream with 16 reference frames
+ * fills half of a 32-slot DPB with them alone. Each slice takes a task slot,
+ * so a picture of 6 slices holds 6: task sets are 256-bit (TaskMask, a struct
+ * handled through the tm_ helpers), frame sets 128-bit (FrameMask) where the
+ * compiler has them, else 64-bit. A worker's id travels in the low bits of the
+ * decoder pointer, aligned on MAX_THREADS bytes.
+ */
+#ifdef __SIZEOF_INT128__
+	#define MAX_FRAMES 128
+	typedef unsigned __int128 FrameMask;
+#else
+	#define MAX_FRAMES 64
+	typedef uint64_t FrameMask;
+#endif
+// In interlaced streams (frame_mbs_only_flag 0) the frames take the slots below
+// FIELD_ID, and a field picture is known as its slot for the top field and its
+// slot + FIELD_ID for the bottom one: as the reference of a macroblock (refPic),
+// the entry of a reference list, the target of a task (taskPics) and the index
+// of its decoding progress (next_deblock_addr, remaining_mbs). A frame picture
+// is known as its slot, its bottom index staying complete (INT_MAX).
+#define FIELD_ID (MAX_FRAMES / 2)
+enum { COL_FRM_TO_FLD = 1, COL_FLD_TO_FRM }; // vertMvScale of a colocated picture of the other structure (8.4.1.2.1)
+#define MAX_THREADS 128
+#define MAX_TASKS 256
+#define TASK_WORDS (MAX_TASKS / 64)
+typedef struct { uint64_t w[TASK_WORDS]; } TaskMask;
+static inline TaskMask tm_none(void) { return (TaskMask){{0}}; }
+static inline TaskMask tm_all(void) { TaskMask m; for (int k = 0; k < TASK_WORDS; k++) m.w[k] = ~(uint64_t)0; return m; }
+static inline TaskMask tm_bit(int i) { TaskMask m = {{0}}; m.w[i >> 6] = (uint64_t)1 << (i & 63); return m; }
+static inline int tm_has(TaskMask m, int i) { return m.w[i >> 6] >> (i & 63) & 1; }
+static inline void tm_set(TaskMask *m, int i) { m->w[i >> 6] |= (uint64_t)1 << (i & 63); }
+static inline void tm_clear(TaskMask *m, int i) { m->w[i >> 6] &= ~((uint64_t)1 << (i & 63)); }
+static inline int tm_any(TaskMask m) { uint64_t o = 0; for (int k = 0; k < TASK_WORDS; k++) o |= m.w[k]; return o != 0; }
+static inline int tm_eq(TaskMask a, TaskMask b) { uint64_t o = 0; for (int k = 0; k < TASK_WORDS; k++) o |= a.w[k] ^ b.w[k]; return o == 0; }
+static inline TaskMask tm_and(TaskMask a, TaskMask b) { for (int k = 0; k < TASK_WORDS; k++) a.w[k] &= b.w[k]; return a; }
+static inline TaskMask tm_or(TaskMask a, TaskMask b) { for (int k = 0; k < TASK_WORDS; k++) a.w[k] |= b.w[k]; return a; }
+static inline TaskMask tm_andnot(TaskMask a, TaskMask b) { for (int k = 0; k < TASK_WORDS; k++) a.w[k] &= ~b.w[k]; return a; } // a & ~b
+static inline int tm_ctz(TaskMask m) { // lowest set bit, MAX_TASKS if none
+	for (int k = 0; k < TASK_WORDS; k++) {
+		if (m.w[k])
+			return k * 64 + __builtin_ctzll(m.w[k]);
+	}
+	return MAX_TASKS;
+}
+static inline int tm_pop(TaskMask *m) { // clears and returns the lowest set bit, -1 if none
+	for (int k = 0; k < TASK_WORDS; k++) {
+		if (m->w[k]) {
+			int i = __builtin_ctzll(m->w[k]);
+			m->w[k] &= m->w[k] - 1;
+			return k * 64 + i;
+		}
+	}
+	return -1;
+}
+// iterates i over the set bits of a snapshot of a task mask, lowest first
+#define TM_FOREACH(i, mask) for (TaskMask _tm_##i = (mask); ((i) = tm_pop(&_tm_##i)) >= 0;)
+static inline int mask_ctz(FrameMask m) {
+	#ifdef __SIZEOF_INT128__
+		uint64_t lo = (uint64_t)m;
+		return lo ? __builtin_ctzll(lo) : 64 + __builtin_ctzll((uint64_t)(m >> 64));
+	#else
+		return __builtin_ctzll(m);
+	#endif
+}
+static inline int mask_popcount(FrameMask m) {
+	#ifdef __SIZEOF_INT128__
+		return __builtin_popcountll((uint64_t)m) + __builtin_popcountll((uint64_t)(m >> 64));
+	#else
+		return __builtin_popcountll(m);
+	#endif
+}
+static inline int mask_bits(FrameMask m) { // index of the highest set bit plus one
+	int n = 0;
+	for (; m; m >>= 1)
+		n++;
+	return n;
+}
+
+
+
+/**
+ * This structure stores all the data necessary to decode a slice, such that it
+ * can be copied into Edge264MvcContext when a worker starts decoding it.
+ */
+typedef struct {
+	Edge264MvcGetBits gb; // must be first in struct to use the same pointer for bitstream functions
+	int8_t slice_type; // 0..2
+	int8_t field_pic_flag; // 0..1
+	int8_t bottom_field_flag; // 0..1
+	int8_t MbaffFrameFlag; // 0..1
+	int8_t direct_spatial_mv_pred_flag; // 0..1
+	int8_t col_short_term; // 0..1, RefPicList1[0] is a short-term reference (B slices)
+	int8_t col_structure; // 0, or COL_FRM_TO_FLD / COL_FLD_TO_FRM when the colocated picture is a frame for a field or a field for a frame (Table 8-8)
+	int8_t col_bottom; // MBAFF: the bottom field of RefPicList1[0] is closer than the top one (8-175, 8-176, topAbsDiffPOC >= bottomAbsDiffPOC)
+	int8_t luma_log2_weight_denom; // 0..7
+	int8_t chroma_log2_weight_denom; // 0..7
+	int8_t disable_deblocking_filter_idc; // 0..2
+	int8_t FilterOffsetA; // -12..12
+	int8_t FilterOffsetB;
+	int8_t ChromaArrayType; // 0..3
+	int8_t sp_slice; // 0..1, an SP slice parsed as a P slice whose P macroblocks decode with 8.6.1
+	int8_t fmo_group; // slice group of the slice when fmo_map is set
+	const uint8_t *fmo_map; // slice group of every macroblock of the picture (8.2.2.8) with FMO, else NULL
+	int8_t QS_Y; // 0..51, QSY of an SP slice (7-31)
+	int8_t mb_height_C; // rows of a macroblock in each chroma plane, 16 in 4:2:2 and 8 otherwise
+	int8_t mbw_Y, mbw_C; // bytes of a macroblock row in the luma and in each chroma plane, 16 and 8 at 8 bits, twice that above
+	int8_t px_shift; // log2 of the bytes of a sample, 1 above 8 bits (luma and chroma have the same bit depth)
+	int8_t QpBdOffset_Y, QpBdOffset_C; // 6 * (BitDepth - 8) (7-4, 7-6), QP and QP_C holding QP' = QP + QpBdOffset
+	int8_t direct_8x8_inference_flag; // 0..1
+	int8_t interlaced; // 0..1, frame_mbs_only_flag is 0, see FIELD_ID
+	int32_t field_C_adjust; // added to plane_size_Y for the chroma plane of a bottom field (an index of FIELD_ID or more when interlaced)
+	uint16_t stride_Cr; // from a Cb row to the Cr row of the same y, half the chroma stride of a frame
+	FrameMask field_frames; // slots holding field pictures rather than a frame, when interlaced
+	int8_t cabac_init_idc; // 0..3
+	int8_t next_deblock_idc; // -1..31, -1 if next_deblock_addr is not written back to dec, currPic otherwise
+	int8_t frame_flip_bit; // 0..1
+	int16_t pic_width_in_mbs; // 0..1023
+	int16_t pic_height_in_mbs; // 0..1055
+	uint16_t stride[3]; // 0..65472 (at max width, 16bit & field pic), [iYCbCr]
+	int32_t FrameId;
+	int32_t plane_size_Y;
+	int32_t plane_size_C;
+	int32_t next_deblock_addr; // INT_MIN..INT_MAX
+	uint32_t first_mb_in_slice; // 0..139263
+	int32_t mb_bound; // first macroblock of the next slice in decoding order if after this one, else INT_MAX (BOUND_UNKNOWN until then)
+	FrameMask prev_long_term_frames;
+	union { int8_t QP[4]; i8x4 QP_s; }; // same as mb
+	Edge264MvcUnrefCb unref_cb; // copy from decode_NAL
+	void *unref_arg; // copy from decode_NAL
+	Edge264MvcMacroblock *mb_buffer;
+	Edge264MvcMacroblock *mbCol_buffer;
+	uint8_t *samples_buffers[MAX_FRAMES];
+	union { uint16_t samples_clip[3][8]; i16x8 samples_clip_v[3]; }; // [iYCbCr], maximum sample value
+	union { int8_t RefPicList[2][32]; int64_t RefPicList_l[8]; i8x16 RefPicList_v[4]; };
+	union { int32_t diff_poc[MAX_FRAMES]; i32x4 diff_poc_v[MAX_FRAMES / 4]; };
+	int32_t diff_poc_fld[2][MAX_FRAMES]; // MBAFF: distances from each field of the current frame to the fields (see FIELD_ID)
+	Edge264MvcPicParameterSet pps;
+	int16_t explicit_weights[3][64]; // [iYCbCr][LX][RefIdx]
+	int8_t explicit_offsets[3][64];
+} Edge264MvcTask;
+
+
+
+/**
+ * This structure stores the context data needed by each thread to decode
+ * a slice, such that we can dedicate a single register pointer to it.
+ */
+typedef struct Edge264MvcContext {
+	Edge264MvcTask t; // must be first in struct to use the same pointer for bitstream functions
+	int8_t thread_id;
+	int8_t mb_qp_delta_nz; // 0..1
+	int16_t mbx;
+	int16_t mby;
+	int32_t CurrMbAddr;
+	int32_t mb_skip_run;
+	int8_t overrun; // the slice decoded past mb_bound before learning it, and is decoded again
+	int16_t task_id;
+	int8_t currPic;
+	uint8_t *samples_mb[3]; // address of top-left byte of each plane in current macroblock
+	Edge264MvcMacroblock * _mb; // backup storage for macro mb
+	Edge264MvcMbCache * _mbc; // backup storage for macro mbc, the ring entry of mb
+	Edge264MvcMbCache *mbc_ring; // first entry of the ring (after the copy of its last entry)
+	int32_t mbc_ring_size; // pic_width_in_mbs + 2
+	const Edge264MvcMacroblock * _mbA; // backup storage for macro mbA
+	const Edge264MvcMacroblock * _mbB; // backup storage for macro mbB
+	const Edge264MvcMacroblock * _mbC; // backup storage for macro mbC
+	const Edge264MvcMacroblock * _mbD; // backup storage for macro mbD
+	const Edge264MvcMacroblock *mbCol;
+	Edge264MvcMacroblock mbCol_cross __attribute__((aligned(64))); // colocated values gathered from another picture structure (see colocated_cross)
+
+	// MBAFF frames (see parse_slice_data_mbaff): the macroblock is decoded in
+	// mbaff_nb[4] amid neighbours remapped to it (D, B, C, A, then the left
+	// neighbours of the D locations of its left column), and copied back
+	Edge264MvcMacroblock mbaff_nb[6] __attribute__((aligned(64)));
+	Edge264MvcMbCache mbaff_nbc[3] __attribute__((aligned(64))); // A, current, B
+	Edge264MvcMbCache *mbaff_cache; // [pair row & 1][pair x][bottom], in place of the ring
+	Edge264MvcMacroblock *mbaff_mb; // the macroblock in the frame
+	int8_t mb_field; // field decoding flag of the current pair
+	int8_t mbaff_avail; // availability of the pairs A/B/C/D (bits 0-3)
+	int8_t mbaff_skip; // mb_skip_flag of a CABAC macroblock parsed ahead, or -1
+	int8_t mbaff_bot_skip; // that of the bottom macroblock, parsed with a skipped top one
+	int8_t mbaff_refIdxA[4]; // refIdx of A at the 4x4 block rows 1 and 3 (L0 then L1), which a field macroblock may take from other 8x8 blocks than rows 0 and 2
+	int16_t mbaff_px, mbaff_py; // pair position
+	uint16_t mbaff_stride[2]; // frame strides of luma and chroma
+	int16_t mbaff_height; // pic_height_in_mbs of the frame
+	union { int8_t mbaff_lists[3][2][32]; i8x16 mbaff_lists_v[3][4]; }; // RefPicList of frame, top and bottom field macroblocks
+	int8_t mbaff_tables; // which of the three the tables below were last loaded for (see mbaff_state)
+	int16_t mbaff_DSF[3][32]; // DistScaleFactor, MapPicToList0 and implicit_weights of the three
+	int8_t mbaff_map[3][MAX_FRAMES];
+	uint8_t mbaff_iw[3][32][32];
+	int16_t mbaff_ew[2][3][64]; // explicit_weights and explicit_offsets of frame and field macroblocks (8.4.2.3, refIdx >> 1)
+	int8_t mbaff_eo[2][3][64];
+	Edge264MvcDecoder *d;
+	Edge264MvcMbFlags inc; // increments for CABAC indices of macroblock syntax elements
+	union { int8_t unavail4x4[48]; i8x16 unavail4x4_v[3]; }; // unavailability of neighbouring A/B/C/D blocks
+	union { int8_t unavail_intra[16]; i8x16 unavail_intra_v; }; // unavail4x4 for intra prediction, where constrained_intra_pred_flag counts Inter neighbours as unavailable
+	int8_t unavail_intra16x16; // its A/B/D bits for Intra16x16 and chroma prediction, which read all the samples left of the macroblock
+	int8_t mbaff_left_halves; // MBAFF with constrained_intra_pred_flag: the upper and lower halves of the chroma samples left of the macroblock are not available (bits 0-1)
+	int8_t unavail16x16; // unavailability of the neighbouring A/B/C/D macroblocks (bits 0-3)
+	union { int8_t nC_inc[3][16]; i8x16 nC_inc_v[3]; }; // stores the intra/inter default increment from unavailable neighbours (9.3.3.1.1.9)
+	union { uint8_t cabac[1024]; i8x16 cabac_v[64]; };
+	
+	// neighbouring offsets (relative to the start of each array in mb)
+	union { int16_t A4x4_int8[16]; i16x16 A4x4_int8_v; };
+	union { int32_t B4x4_int8[16]; i32x16 B4x4_int8_v; };
+	union { int16_t ACbCr_int8[16]; i16x8 ACbCr_int8_v[2]; };
+	union { int32_t BCbCr_int8[16]; i32x8 BCbCr_int8_v[2]; };
+	union { int8_t refIdx4x4_C[16]; int32_t refIdx4x4_C_s[4]; i8x16 refIdx4x4_C_v; }; // shuffle vector for mv prediction
+	union { int16_t absMvd_A[16]; i16x16 absMvd_A_v; };
+	union { int32_t absMvd_B[16]; i32x16 absMvd_B_v; };
+	union { int16_t mvs_A[16]; i16x16 mvs_A_v; };
+	union { int32_t mvs_B[16]; i32x16 mvs_B_v; };
+	union { int32_t mvs_C[16]; i32x16 mvs_C_v; };
+	union { int32_t mvs_D[16]; i32x16 mvs_D_v; };
+	
+	// Inter context
+	int8_t transform_8x8_mode_flag; // updated during parsing to account for noSubMbPartSizeLessThan8x8Flag
+	uint8_t num_ref_idx_mask;
+	int16_t DistScaleFactor[32]; // [refIdxL0]
+	union { int8_t clip_ref_idx[8]; i8x8 clip_ref_idx_v; };
+	int8_t MapPicToList0[MAX_FRAMES];
+	union { uint8_t implicit_weights[32][32]; i8x16 implicit_weights_v[32][2]; }; // w1 for [ref0][ref1], stored with +64 offset
+	union { uint8_t edge_buf[2016]; int64_t edge_buf_l[252]; i8x16 edge_buf_v[126]; };
+	
+	// Residuals context
+	union { int16_t ctxIdxOffsets[4]; i16x4 ctxIdxOffsets_l; }; // {cbf,sig_flag,last_sig_flag,coeff_abs}
+	union { int8_t coeff_abs_inc[8]; i8x8 coeff_abs_inc_l; };
+	union { int8_t sig_inc[64]; i8x8 sig_inc_l; i8x16 sig_inc_v[4]; };
+	union { int8_t last_inc[64]; i8x8 last_inc_l; i8x16 last_inc_v[4]; };
+	union { int8_t scan[64]; i8x4 scan_s; i8x8 scan_l; i8x16 scan_v[4]; };
+	union { int8_t QP_C[2][64]; i8x16 QP_C_v[8]; };
+	union { int32_t c[64]; i32x4 c_v[16]; i32x8 c_V[8]; }; // non-scaled residual coefficients
+	int32_t sp_levels[24][16]; // the levels of the 4x4 blocks of a P macroblock in an SP slice, luma then Cb and Cr AC, like c
+	int32_t sp_levels_dc[8]; // and its chroma DC levels, at the positions of c for transform_dc2x2
+	int32_t fmo_decoded; // macroblocks a slice with slice groups decoded, as they are not consecutive
+	
+	// Deblocking context
+	int32_t deblock_offB; // from a macroblock to its neighbour B in the macroblock array, pic_width_in_mbs + 1 but twice that for a field macroblock of an MBAFF frame
+	union { uint8_t alpha[16]; int32_t alpha_s[4]; i8x16 alpha_v; }; // {internal_Y,internal_Cb,internal_Cr,0,0,0,0,0,left_Y,left_Cb,left_Cr,0,top_Y,top_Cb,top_Cr,0}
+	union { uint8_t beta[16]; int32_t beta_s[4]; i8x16 beta_v; };
+	union { int32_t tC0_s[16]; int64_t tC0_l[8]; i8x16 tC0_v[4]; i8x32 tC0_V[2]; }; // 4 bytes per edge in deblocking order -> 8 luma edges then 8 alternating Cb/Cr edges
+	union { int64_t tC0_fh_l[2]; i8x16 tC0_fh_v; }; // Cb/Cr edges at the luma edges f and h, which only 4:2:2 filters
+	
+	// Logging context
+	uint64_t log_base_us; // timestamp of decoder initialization
+	Edge264MvcLogCb log_cb;
+	void *log_arg;
+	const char *log_indent;
+	uint16_t log_pos; // next writing position in log_buf
+	char log_buf[4096];
+} Edge264MvcContext;
+#define mb ctx->_mb
+#define mbc ctx->_mbc
+#define mbA ctx->_mbA
+#define mbB ctx->_mbB
+#define mbC ctx->_mbC
+#define mbD ctx->_mbD
+
+
+
+
+/**
+ * This structure stores all variables scoped to the entire stream.
+ * 
+ * The frame buffer stores empty and used frames with a Structure Of Arrays
+ * pattern, while using as few arrays as possible to prevent impossible storage
+ * patterns (e.g. a ref being both short and long term).
+ * 
+ * Ref flags are stored in prev_short_term_frames and prev_long_term_frames bitfields:
+ * _ short-term refs have values (1, 0)
+ * _ long-term refs have values (0, 1)
+ * _ non-existing refs from gaps in frame_num have values (1, 1)
+ * 
+ * Memory management control operations are captured by short_term_frames
+ * and long_term_frames which store the future state of references that
+ * will replace the previous one when the current frame is complete.
+ * 
+ * Output status is stored in to_get_frames and output_frames bitfields:
+ * _ pictures held for reordering in the DPB have values (1, 0)
+ * _ pictures that have been output from the DPB and are stored for future
+ *   retrieval in get_frames_queue have values (1, 1)
+ * _ pictures sent to get_frame and waiting to be returned have values (0, 1)
+ */
+typedef int (*Parser)(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+// Entries of each view's output queue. Pictures are queued when bumped, which
+// under frame threading is mostly before they are decoded, and decode_nal keeps
+// the queue able to take every picture awaiting output, so the queue bounds the
+// pictures in flight as much as the DPB slots do.
+#define QUEUE_SIZE MAX_FRAMES
+typedef struct {
+	int8_t pic;
+	int8_t deblock;
+	int32_t first_mb;
+	int32_t keep_mb;
+} Edge264MvcPendingSlice; // a decoded slice left for another thread to deblock and publish in order
+struct Edge264MvcDecoder {
+	// minimal set of fields preserved across flushes
+	Edge264MvcGetBits gb; // must be first in the struct to use the same pointer for bitstream functions
+	int16_t n_threads; // 0 to disable multithreading
+	int16_t max_pics; // most pictures with slice tasks in flight, about the threads, bounding the memory
+	int16_t min_pics; // fewest of them however large the pictures (see pics_in_flight)
+	int16_t frame_slots; // one past the highest frame slot ever allocated (the lowest free slot is always taken), bounding the scans of slots
+	int8_t nal_unit_type; // 5 significant bits
+	int32_t plane_size_Y;
+	int32_t plane_size_C;
+	int32_t prevFrameId;
+	int32_t next_dispnum; // monotonic display-order counter, assigned to each frame when it is bumped for output
+	FrameMask frame_flip_bits; // bitfield storing target values of bit 0 in mb->recovery_bits for each frame
+	Edge264MvcAllocCb alloc_cb;
+	Edge264MvcFreeCb free_cb;
+	void *alloc_arg;
+	void *(*worker_loop)(void *);
+	uint8_t *samples_buffers[MAX_FRAMES];
+	Edge264MvcMacroblock *mb_buffers[MAX_FRAMES];
+	uint8_t *fmo_maps[MAX_FRAMES]; // the macroblock to slice group map of each picture with FMO
+	int32_t fmo_map_sizes[MAX_FRAMES];
+	int32_t fmo_map_ids[MAX_FRAMES]; // FrameId the map was derived for
+	uint8_t *pps_slice_group_ids[256]; // slice_group_id of the PPSs of map type 6
+	FrameMask stale_frames; // frames of a previous frame format held by the caller, freed when released
+	void *mbc_ring_allocs[MAX_THREADS + 1]; // per worker (thread_id + 1), see Edge264MvcMbCache
+	int32_t mbc_ring_sizes[MAX_THREADS + 1];
+	uint8_t *spec_rows_allocs[MAX_THREADS + 1]; // per worker, see spec_rows
+	size_t spec_rows_sizes[MAX_THREADS + 1];
+	Parser parse_nal_unit[32];
+	pthread_t threads[MAX_THREADS];
+	pthread_mutex_t lock;
+	pthread_cond_t task_ready;
+	pthread_cond_t frame_progress[MAX_FRAMES]; // signals next_deblock_addr[i] has reached progress_wake_addr[i]
+	pthread_cond_t task_complete;
+	Edge264MvcOutput out;
+	int8_t out_monochrome; // the frame buffers were allocated for 4:0:0, so their chroma planes are neutral
+	int8_t interlaced; // the frame buffers were allocated for frame_mbs_only_flag 0, so they may hold field pictures, see FIELD_ID
+	int32_t max_frame_pixels; // largest frame accepted after cropping, 0 for the largest any level allows
+	int8_t max_num_reorder_frames; // 0 uses SPS value, -1 means immediate, positive values cap it
+	int8_t want_frame; // send_nal returned EDGE264MVC_AGAIN, so receive_frame waits for a frame
+	int8_t ended; // send_end was called, so receive_frame drains to EDGE264MVC_END
+	int8_t undelivered; // the DPB or output queue was full while the caller held no frame, and no frame came out since
+	int64_t in_pts; // values sent with the NAL being parsed
+	int64_t in_user_data;
+	
+	// general contextual fields
+	int8_t nal_ref_idc; // 2 significant bits
+	int8_t IdrPicFlag; // 1 significant bit
+	int8_t currPic; // index of current incomplete frame, or -1
+	int8_t currPic_marked; // the last slice of currPic marked it as reference, even if it then discarded it
+	int8_t currPic_reference; // the first slice of currPic has nal_ref_idc != 0 (7.4.1.2.4)
+	int8_t basePic; // index of last base frame for cross-reference in MVC
+	int8_t currVp; // currPic, plus FIELD_ID for a bottom field picture
+	int8_t currField; // structure of currPic: 0 for a frame, 1 + bottom_field_flag for a field
+	int8_t field_slot[2]; // slot of a first field still without its second field in each view (whose fields interleave), or -1
+	int8_t field_slot_bottom[2]; // its bottom_field_flag
+	int8_t field_slot_reference[2]; // it has nal_ref_idc != 0
+	int8_t hH; // last decoded timestamp hours, 0..23
+	int8_t mM; // last decoded timestamp minutes, 0..59
+	int8_t sS; // last decoded timestamp seconds, 0..59
+	int8_t flushing; // set while draining at end-of-stream (buf>=end); lets get_frame emit an unpairable MVC base alone instead of deadlocking
+	int8_t shutdown; // set by free_decoder to make idle worker threads exit their wait loop for a clean join before destroying mutex/conds
+	int8_t resume_state; // 0 before the first picture since open or a flush, 1 while that picture was not an IDR picture (see leading_frames), 2 once an IDR picture or mmco5 restarted the POCs
+	int32_t resume_poc; // POC of the first picture since open or a flush, while resume_state is 1
+	int32_t FrameNum; // value for the current incomplete frame, unaffected by mmco5
+	int32_t PrevRefFrameNum[2]; // one per view
+	int32_t idr_pic_id; // value for the last slice, used for detecting new frames
+	int32_t delta_pic_order_cnt0; // value for the last slice, used for detecting new frames
+	int32_t prevPicOrderCnt[2]; // one per view
+	int32_t TopFieldOrderCnt; // value for the current incomplete frame, unaffected by mmco5
+	int32_t BottomFieldOrderCnt;
+	Edge264MvcSeqParameterSet sps;
+	Edge264MvcSeqParameterSet ssps;
+	int64_t OutputPocBase[2];
+	int64_t PrevOutputUnwrapped[2]; // previous exported DisplayPoc per view, kept strictly increasing (see edge264mvc_unwrap_output_poc)
+	int8_t HavePrevOutputPoc[2];
+	Edge264MvcPicParameterSet PPS[256]; // every pic_parameter_set_id (7.4.2.2)
+	
+	// frame buffer as a Structure Of Arrays
+	FrameMask short_term_frames; // bitfield for indices of short-term or non-existing frame/view references for current view
+	FrameMask long_term_frames; // bitfield for indices of long-term or non-existing frame/view references for current view
+	FrameMask to_get_frames; // bitfield for frames waiting to be output
+	FrameMask output_frames; // bitfield for frames that are owned by the caller after get_frame and not yet returned
+	FrameMask non_base_frames; // bitfield for frames that are non-base views in MVC
+	FrameMask leading_frames; // bitfield for frames displayed before the non-IDR picture decoding resumed at, decoded but never output
+	FrameMask prev_short_term_frames; // state of short_term_frames for both views before current frame
+	FrameMask prev_long_term_frames; // state of long_term_frames for both views before current frame
+	FrameMask field_frames; // slots holding field pictures rather than a frame (interlaced)
+	FrameMask started_fields; // field pictures (see FIELD_ID) of which a slice was parsed
+	FrameMask short_term_fields[2], long_term_fields[2]; // marking of the fields of the slots [bottom_field_flag] when interlaced, short_term_frames and long_term_frames holding the slots of which either field is marked
+	FrameMask prev_short_term_fields[2], prev_long_term_fields[2];
+	int32_t FrameNums[MAX_FRAMES]; // signed to be used along FieldOrderCnt in initial reference ordering
+	int32_t FrameIds[MAX_FRAMES]; // unique identifiers for each frame, incremented in decoding order
+	int32_t DispOrder[MAX_FRAMES]; // monotonic display-order rank, assigned when a frame is bumped for output (see next_dispnum)
+	int32_t AuBaseIds[2][MAX_FRAMES]; // 1 + FrameIds of the base views parsed right before and after each dependent view, 0 for none (see same_access_unit)
+	int32_t lastBaseId; // 1 + FrameId of the last base view parsed, 0 for none
+	int8_t get_frame_queue[2][QUEUE_SIZE]; // FIFO with insertion at 0 for both views, and empty slots having value -1
+	int8_t LongTermFrameIdx[MAX_FRAMES];
+	int8_t prev_LongTermFrameIdx[MAX_FRAMES]; // state of LongTermFrameIdx before current frame
+	union { int32_t FieldOrderCnt[2][MAX_FRAMES]; i32x4 FieldOrderCnt_v[2][MAX_FRAMES / 4]; }; // lower/higher half for top/bottom fields
+	int32_t remaining_mbs[MAX_FRAMES] __attribute__((aligned(64))); // when 0 all mbs have been decoded yet not deblocked
+	int32_t next_deblock_addr[MAX_FRAMES]; // next CurrMbAddr value for which mbB will be deblocked, when INT_MAX the picture is complete
+	
+	// fields accessed concurrently from multiple threads
+	TaskMask pending_tasks;
+	TaskMask busy_tasks; // bitmask for tasks that are either pending or processed in a thread
+	TaskMask ready_tasks;
+	int16_t held_task; // newest slice task, whose end the next NAL tells (mb_bound), or -1
+	uint64_t acked_tasks[MAX_TASKS / 64]; // tasks that know their mb_bound and decode no macroblock past it, atomic per word (see acked_load)
+	TaskMask task_after[MAX_TASKS]; // older tasks of the same picture whose macroblocks a task may share, to finish first
+	TaskMask chained_tasks; // pending slices taken by the worker finishing the slices before them in their picture, see worker_loop
+	int32_t task_bounds[MAX_TASKS]; // mb_bound of each task, written by the parser once known
+	int8_t task_wait_pic[MAX_TASKS]; // frame whose progress each task waits for in wait_frame_progress, or -1
+	volatile FrameMask task_dependencies[MAX_TASKS]; // frames on which each task depends to start
+	int8_t taskPics[MAX_TASKS]; // values of currPic for each task
+	uint64_t deblock_pending_slices; // used entries of deblock_pending
+	Edge264MvcPendingSlice deblock_pending[64];
+	int32_t progress_wake_addr[MAX_FRAMES]; // lowest next_deblock_addr a task waits for on each frame, or INT_MAX
+	uint32_t task_seq[MAX_TASKS]; // decoding order of each task, workers pick the oldest ready task
+	uint32_t next_task_seq;
+	Edge264MvcTask tasks[MAX_TASKS];
+	uint32_t frame_flags[MAX_FRAMES]; // EDGE264MVC_VIEW_* of each frame, OR-ed atomically by the workers
+	int64_t frame_pts[MAX_FRAMES]; // values sent with the NAL starting each frame
+	int64_t frame_user_data[MAX_FRAMES];
+	
+	// Logging context
+	uint64_t log_base_us; // timestamp of decoder initialization
+	Edge264MvcLogCb log_cb;
+	void *log_arg;
+	uint16_t log_pos; // next writing position in log_buf
+	uint8_t log_truncated; // the trace of the current NAL did not fit in log_buf
+	char log_buf[9416];
+};
+
+
+
+#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+	#error "Little-endian CPU required at the moment until requested and testable"
+#endif
+#define little_endian32(x) (x)
+#define little_endian64(x) (x)
+#define big_endian32 __builtin_bswap32
+#define big_endian64 __builtin_bswap64
+
+#if UINT_MAX != 4294967295U || ULLONG_MAX != 18446744073709551615U
+	#error "edge264-mvc currently expects 32-bit int and 64-bit long long"
+#endif
+#ifndef WORD_BIT
+	#define WORD_BIT 32
+#endif
+#if SIZE_MAX == 4294967295U
+	#define SIZE_BIT 32
+	#define clz __builtin_clz
+	#define ctz __builtin_ctz
+#elif SIZE_MAX == 18446744073709551615U
+	#define SIZE_BIT 64
+	#define clz __builtin_clzll
+	#define ctz __builtin_ctzll
+#endif
+
+#ifndef noinline
+	#define noinline __attribute__((noinline))
+#endif
+#if defined(__clang__)
+	#define always_inline __attribute__((always_inline))
+	#define cold __attribute__((cold))
+#elif defined(__GNUC__)
+	#define always_inline inline __attribute__((always_inline))
+	#define cold __attribute__((cold))
+#elif defined(_MSC_VER)
+	#define always_inline __forceinline
+	#define cold
+#else
+	#ifndef always_inline
+		#define always_inline inline
+	#endif
+	#ifndef cold
+		#define cold
+	#endif
+#endif
+
+
+/**
+ * Point mbc to the ring entry of the next macroblock, after copying the first
+ * entry past the end of the ring (where the last entry reads B) and the last
+ * entry before its start (where the first entry reads A).
+ */
+static always_inline void advance_mbc(Edge264MvcContext *ctx) {
+	Edge264MvcMbCache *e = ctx->_mbc;
+	if (e == ctx->mbc_ring)
+		e[ctx->mbc_ring_size] = *e;
+	if (++e == ctx->mbc_ring + ctx->mbc_ring_size) {
+		e[-1 - ctx->mbc_ring_size] = e[-1];
+		e = ctx->mbc_ring;
+	}
+	ctx->_mbc = e;
+}
+
+
+/**
+ * Constants that are common to several files
+ */
+static const i8x16 scan_4x4[2] = {
+	{0, 4, 1, 2, 5, 8, 12, 9, 6, 3, 7, 10, 13, 14, 11, 15},
+	{0, 1, 4, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+};
+static const i8x16 scan_8x8_cavlc[2][4] = {{
+	{ 0,  9, 10, 18, 33,  5, 27, 56, 28, 15, 43, 51, 23, 52, 46, 61},
+	{ 8, 16,  3, 25, 26,  6, 34, 49, 21, 22, 50, 44, 31, 59, 39, 62},
+	{ 1, 24,  4, 32, 19, 13, 41, 42, 14, 29, 57, 37, 38, 60, 47, 55},
+	{ 2, 17, 11, 40, 12, 20, 48, 35,  7, 36, 58, 30, 45, 53, 54, 63},
+}, {
+	{ 0,  9, 16,  7, 18, 19, 20, 27, 28, 35, 36, 43, 45, 56, 54, 60},
+	{ 1,  3, 11, 12, 13, 25, 21, 33, 29, 41, 37, 49, 46, 57, 55, 61},
+	{ 2,  4,  5, 17, 14, 32, 22, 40, 30, 48, 38, 50, 47, 52, 58, 62},
+	{ 8, 10,  6, 24, 15, 26, 23, 34, 31, 42, 39, 44, 51, 53, 59, 63},
+}};
+static const i8x16 scan_8x8_cabac[2][4] = {{
+	{ 0,  8,  1,  2,  9, 16, 24, 17, 10,  3,  4, 11, 18, 25, 32, 40},
+	{33, 26, 19, 12,  5,  6, 13, 20, 27, 34, 41, 48, 56, 49, 42, 35},
+	{28, 21, 14,  7, 15, 22, 29, 36, 43, 50, 57, 58, 51, 44, 37, 30},
+	{23, 31, 38, 45, 52, 59, 60, 53, 46, 39, 47, 54, 61, 62, 55, 63},
+}, {
+	{ 0,  1,  2,  8,  9,  3,  4, 10, 16, 11,  5,  6,  7, 12, 17, 24},
+	{18, 13, 14, 15, 19, 25, 32, 26, 20, 21, 22, 23, 27, 33, 40, 34},
+	{28, 29, 30, 31, 35, 41, 48, 42, 36, 37, 38, 39, 43, 49, 50, 44},
+	{45, 46, 47, 51, 56, 57, 52, 53, 54, 55, 58, 59, 60, 61, 62, 63},
+}};
+static const i8x16 scan_chroma[2] = {
+	{0, 1, 2, 3, 4, 5, 6, 7},
+	{0, 2, 1, 4, 6, 3, 5, 7, 8, 10, 9, 12, 14, 11, 13, 15}
+};
+
+static const int8_t inc8x8[12] = {0, 5, 4, 2, 8, 13, 12, 10, 16, 21, 20, 18};
+static const int8_t bit8x8[12] = {5, 3, 2, 7, 13, 11, 10, 15, 21, 19, 18, 23};
+
+static const int8_t x444[16] = {0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12};
+static const int8_t y444[16] = {0, 0, 4, 4, 0, 0, 4, 4, 8, 8, 12, 12, 8, 8, 12, 12};
+static const int8_t x420[8] = {0, 4, 0, 4, 0, 4, 0, 4};
+static const int8_t y420[8] = {0, 0, 4, 4, 0, 0, 4, 4};
+
+// really big, defined in edge264mvc.c
+extern const int8_t cabac_context_init[4][1024][2] __attribute__((aligned(16)));
+
+
+
+/**
+ * Each intraNxN mode is converted to one of these modes right before decoding
+ * to select the proper internal routine.
+ */
+enum Intra4x4Modes {
+	I4x4_V_8,
+	I4x4_H_8,
+	I4x4_DC_8,
+	I4x4_DC_A_8,
+	I4x4_DC_B_8,
+	I4x4_DC_AB_8,
+	I4x4_DDL_8,
+	I4x4_DDL_C_8,
+	I4x4_DDR_8,
+	I4x4_VR_8,
+	I4x4_HD_8,
+	I4x4_VL_8,
+	I4x4_VL_C_8,
+	I4x4_HU_8,
+};
+
+enum Intra8x8Modes {
+	I8x8_V_8,
+	I8x8_V_C_8,
+	I8x8_V_D_8,
+	I8x8_V_CD_8,
+	I8x8_H_8,
+	I8x8_H_D_8,
+	I8x8_DC_8,
+	I8x8_DC_A_8,
+	I8x8_DC_AC_8,
+	I8x8_DC_AD_8,
+	I8x8_DC_ACD_8,
+	I8x8_DC_B_8,
+	I8x8_DC_BD_8,
+	I8x8_DC_C_8,
+	I8x8_DC_D_8,
+	I8x8_DC_CD_8,
+	I8x8_DC_AB_8,
+	I8x8_DDL_8,
+	I8x8_DDL_C_8,
+	I8x8_DDL_D_8,
+	I8x8_DDL_CD_8,
+	I8x8_DDR_8,
+	I8x8_DDR_C_8,
+	I8x8_VR_8,
+	I8x8_VR_C_8,
+	I8x8_HD_8,
+	I8x8_VL_8,
+	I8x8_VL_C_8,
+	I8x8_VL_D_8,
+	I8x8_VL_CD_8,
+	I8x8_HU_8,
+	I8x8_HU_D_8,
+};
+
+enum Intra16x16Modes {
+	I16x16_V_8,
+	I16x16_H_8,
+	I16x16_DC_8,
+	I16x16_DC_A_8,
+	I16x16_DC_B_8,
+	I16x16_DC_AB_8,
+	I16x16_P_8,
+};
+
+enum IntraChromaModes {
+	IC8x8_DC_8,
+	IC8x8_DC_A_8,
+	IC8x8_DC_B_8,
+	IC8x8_DC_AB_8,
+	IC8x8_H_8,
+	IC8x8_V_8,
+	IC8x8_P_8,
+};
+
+
+
+/**
+ * These macros account for the differences in offset addressing between
+ * architectures, whether or not they can add and scale a stride to a pointer
+ * in a single load.
+ * Call DECL_SSTRIDE/DECL_DSTRIDE once to compute scaled source/destination
+ * strides, then SADDR(p, n)/DADDR(p, n) will return p + stride * n
+ */
+#if SIMD == SSE || SIMD == NEON && !defined(__aarch64__)
+	#define DECL_SSTRIDE(value) ssize_t _sstride1 = (value), _sstride3 = _sstride1 * 3, _nsstride1 = -_sstride1, _nsstride3 = _nsstride1 * 3
+	#define DECL_DSTRIDE(value) ssize_t _dstride1 = (value), _dstride3 = _dstride1 * 3, _ndstride1 = -_dstride1, _ndstride3 = _ndstride1 * 3
+	#define SADDR(p, n) ((p) + __builtin_choose_expr(n == -4, _nsstride1 * 4, __builtin_choose_expr(n == -3, _nsstride3, __builtin_choose_expr(n == -2, _nsstride1 * 2, __builtin_choose_expr(n == -1, _nsstride1, __builtin_choose_expr(n == 1, _sstride1, __builtin_choose_expr(n == 2, _sstride1 * 2, __builtin_choose_expr(n == 3, _sstride3, __builtin_choose_expr(n == 4, _sstride1 * 4, 0)))))))))
+	#define DADDR(p, n) ((p) + __builtin_choose_expr(n == -4, _ndstride1 * 4, __builtin_choose_expr(n == -3, _ndstride3, __builtin_choose_expr(n == -2, _ndstride1 * 2, __builtin_choose_expr(n == -1, _ndstride1, __builtin_choose_expr(n == 1, _dstride1, __builtin_choose_expr(n == 2, _dstride1 * 2, __builtin_choose_expr(n == 3, _dstride3, __builtin_choose_expr(n == 4, _dstride1 * 4, 0)))))))))
+#else
+	#define DECL_SSTRIDE(value) ssize_t _sstride1 = (value), _sstride2 = _sstride1 * 2, _sstride3 = _sstride1 * 3, _sstride4 = _sstride1 * 4, _nsstride1 = -_sstride1, _nsstride2 = _nsstride1 * 2, _nsstride3 = _nsstride1 * 3, _nsstride4 = _nsstride1 * 4
+	#define DECL_DSTRIDE(value) ssize_t _dstride1 = (value), _dstride2 = _dstride1 * 2, _dstride3 = _dstride1 * 3, _dstride4 = _dstride1 * 4, _ndstride1 = -_dstride1, _ndstride2 = _ndstride1 * 2, _ndstride3 = _ndstride1 * 3, _ndstride4 = _ndstride1 * 4
+	#define SADDR(p, n) ((p) + __builtin_choose_expr(n == -4, _nsstride4, __builtin_choose_expr(n == -3, _nsstride3, __builtin_choose_expr(n == -2, _nsstride2, __builtin_choose_expr(n == -1, _nsstride1, __builtin_choose_expr(n == 1, _sstride1, __builtin_choose_expr(n == 2, _sstride2, __builtin_choose_expr(n == 3, _sstride3, __builtin_choose_expr(n == 4, _sstride4, 0)))))))))
+	#define DADDR(p, n) ((p) + __builtin_choose_expr(n == -4, _ndstride4, __builtin_choose_expr(n == -3, _ndstride3, __builtin_choose_expr(n == -2, _ndstride2, __builtin_choose_expr(n == -1, _ndstride1, __builtin_choose_expr(n == 1, _dstride1, __builtin_choose_expr(n == 2, _dstride2, __builtin_choose_expr(n == 3, _dstride3, __builtin_choose_expr(n == 4, _dstride4, 0)))))))))
+#endif
+
+
+
+/**
+ * Custom vector intrinsics provide a common denominator for multiple SIMD ISAs,
+ * and make for more compact code. You may also find more specific functions at
+ * the start of each file.
+ * 
+ * Common functions defined here are:
+ * _ absN - elementwise absolute value
+ * _ avgu8 - unsigned elementwise average
+ * _ broadcastN - copy a N-bit element to all elements
+ * _ combine64 - combine the low half of one vector with the high half of another
+ * _ cvtloNuM - extend the low unsigned N-bit elements to M bits
+ * _ cvtloNsM - extend the low signed N-bit elements to M bits
+ * _ cvthiNuM - extend the high unsigned N-bit elements to M bits
+ * _ cvthiNsM - extend the high signed N-bit elements to M bits
+ * _ hadd16 - add pairs of any-signed (0..32767) 16-bit integers from two vectors into a single result
+ * _ ifelse_mask - select each element from two vectors based on mask elements i a third vector
+ * _ loadaN - load N low bits from an aligned pointer, zeroing the rest of the vector
+ * _ loadaNxM - load M aligned pointers of N bits, such that NxM==128
+ * _ loaduN - load N low bits from an unaligned pointer, zeroing the rest of the vector
+ * _ loaduNxM - load M unaligned pointers of N bits, such that NxM==128
+ * _ maddubx - multiply unsigned with any-signed (0..127) 8-bit elements then add pairs to 16-bit with any saturation
+ * _ maddxbs - multiply any-signed (0..127) with signed 8-bit elements then add pairs to 16-bit with any saturation
+ * _ minN - minimum of signed N-bit elements
+ * _ maxN - maximum of signed N-bit elements
+ * _ minu8 - minimum of unsigned 8-bit elements
+ * _ maxu8 - maximum of unsigned 8-bit elements
+ * _ minw32 - minimum of unsigned 32-bit elements with wrapping allowed
+ * _ movemask - extract all sign bits from 8-bit elements into a 16-bit unsigned value
+ * _ packsN - saturate signed N-bit elements to half their size
+ * _ packus16 - saturate signed 16-bit elements to unsigned 8-bit elements
+ * _ pow2x4 - raises 2 to the power of every 32-bit element, or zero if the element is negative
+ * _ setN - copy a N-bit integer to all elements
+ * _ shld - concatenate two size_t values and shift them left to extract a single value
+ * _ shl128 - shift positions up in byte increments without care for the values inserted
+ * _ shr128 - shift positions down in byte increments without care for the values inserted
+ * _ shlc128 - shift positions up in byte increments while inserting a copy of the lowest value
+ * _ shrc128 - shift positions down in byte increments while inserting a copy of the highest value
+ * _ shrd128 - concatenate two vectors and shift positions down then extract a single vector
+ * _ shlv128 - shift positions up in byte increments by a variable amount while inserting zeros
+ * _ shrv128 - shift positions down in byte increments by a variable amount while inserting zeros
+ * _ shrz128 - shift positions down in byte increments while inserting zeros
+ * _ shrrs16 - shift signed 16-bit values right with rounding
+ * _ shrru16 - shift unsigned 16-bit values right with rounding
+ * _ shrpus16 - shift signed 16-bit values right then pack to 8-bit unsigned values
+ * _ shuffle - permute a vector given a vector of indices without care for out-of-bounds indices
+ * _ shufflen - permute a vector given a vector of indices while inserting -1 at negative indices
+ * _ shufflez - permute a vector given a vector of indices while inserting zeros at negative indices
+ * _ shuffle2 - permute an array the size of two vectors without care for out-of-bounds indices
+ * _ shuffle2z - permute an array the size of two vectors while inserting zeros at negative indices
+ * _ shuffle3 - permute an array the size of three vectors without care for out-of-bounds indices
+ * _ subsu8 - substract and saturate unsigned 8-bit elements
+ * _ sum8 - sum 16 unsigned 8-bit elements together and return a low 16-bit value, the rest being undefined
+ * _ trnlo32 - zip even elements from two vectors
+ * _ trnhi32 - zip odd elements from two vectors
+ * _ unziploN - deinterleave the even N-bit elements from two vectors
+ * _ unziphiN - deinterleave the odd N-bit elements from two vectors
+ * _ ziploN - interleave the low N-bit elements from two vectors
+ * _ ziphiN - interleave the high N-bit elements from two vectors
+ */
+static const int8_t shz_mask[48] = {
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+#define loada32(p) ((i32x4){*(int32_t *)(p)})
+#define loada64(p) ((i64x2){*(int64_t *)(p)})
+#define loada128(p) (*(i8x16*)(p))
+#define loada32x4(p0, p1, p2, p3) (i32x4){*(int32_t *)(p0), *(int32_t *)(p1), *(int32_t *)(p2), *(int32_t *)(p3)}
+#define loada64x2(p0, p1) (i64x2){*(int64_t *)(p0), *(int64_t *)(p1)}
+#if SIMD == SSE
+	#define adds16(a, b) (i16x8)_mm_adds_epi16(a, b)
+	#define avgu8(a, b) (i8x16)_mm_avg_epu8(a, b)
+	#define broadcast8(a, i) shuffle(a, _mm_set1_epi8(i))
+	// FIXME broadcast pairs together based on most frequent patterns (ex. shufflelo(0, 0, 1, 1)) to help CSE
+	#define broadcast16(a, i) (i16x8)__builtin_choose_expr((i) < 4, _mm_shuffle_epi32(_mm_shufflelo_epi16(a, _MM_SHUFFLE(0, 0, i, i)), _MM_SHUFFLE(0, 0, 0, 0)), _mm_shuffle_epi32(_mm_shufflehi_epi16(a, _MM_SHUFFLE(0, 0, i & 3, i & 3)), _MM_SHUFFLE(2, 2, 2, 2)))
+	#define broadcast32(a, i) (i32x4)_mm_shuffle_epi32(a, _MM_SHUFFLE(i, i, i, i))
+	#define broadcast64(a, i) (i64x2)_mm_shuffle_epi32(a, _MM_SHUFFLE(2 * i + 1, 2 * i, 2 * i + 1, 2 * i))
+	#define combine64(a, b) (i64x2)_mm_shuffle_ps((__m128)(a), (__m128)(b), _MM_SHUFFLE(3, 2, 1, 0))
+	#define cvthi8u16(a) (u16x8)_mm_unpackhi_epi8(a, (i8x16){})
+	#define cvthi16u32(a) (u32x4)_mm_unpackhi_epi16(a, (i8x16){})
+	// unaligned scalar loads go through memcpy, which compiles to a single move
+	static always_inline i32x4 loadu32(const void *p) {int32_t a; memcpy(&a, p, 4); return (i32x4){a};} // GCC < 12 doesn't define _mm_loadu_si32
+	#define loadu64(p) (i64x2)_mm_loadl_epi64((__m128i*)(p))
+	#define loadu128(p) (i8x16)_mm_loadu_si128((__m128i*)(p))
+	static always_inline i32x4 loadu32x4(const void *p0, const void *p1, const void *p2, const void *p3) {int32_t a[4]; memcpy(a, p0, 4); memcpy(a + 1, p1, 4); memcpy(a + 2, p2, 4); memcpy(a + 3, p3, 4); return (i32x4){a[0], a[1], a[2], a[3]};}
+	static always_inline i64x2 loadu64x2(const void *p0, const void *p1) {int64_t a, b; memcpy(&a, p0, 8); memcpy(&b, p1, 8); return (i64x2){a, b};}
+	#define maxu8(a, b) (i8x16)_mm_max_epu8(a, b)
+	#define minu8(a, b) (i8x16)_mm_min_epu8(a, b)
+	#define max16(a, b) (i16x8)_mm_max_epi16(a, b)
+	#define min16(a, b) (i16x8)_mm_min_epi16(a, b)
+	#define movemask(a) _mm_movemask_epi8(a)
+	#define packs16(a, b) (i8x16)_mm_packs_epi16(a, b)
+	#define packs32(a, b) (i16x8)_mm_packs_epi32(a, b)
+	#define packus16(a, b) (i8x16)_mm_packus_epi16(a, b)
+	#define set8(i) (i8x16)_mm_set1_epi8(i)
+	#define set16(i) (i16x8)_mm_set1_epi16(i)
+	#define set32(i) (i32x4)_mm_set1_epi32(i)
+	#define set64(i) (i64x2)_mm_set1_epi64x(i)
+	#define shl128(a, i) (i8x16)_mm_slli_si128(a, i)
+	#define shr128(a, i) (i8x16)_mm_srli_si128(a, i)
+	#define shrz128(a, i) (i8x16)_mm_srli_si128(a, i)
+	#define shrrs16(a, i) (((i16x8)(a) + (1 << ((i) - 1))) >> (i))
+	#define shrru16(a, i) (u16x8)_mm_avg_epu16((u16x8)(a) >> ((i) - 1), (i16x8){})
+	#define shrpus16(a, b, i) (u8x16)_mm_packus_epi16((i16x8)(a) >> (i), (i16x8)(b) >> (i))
+	#define shrrpu16(a, b, i) (u8x16)_mm_packus_epi16(_mm_avg_epu16((u16x8)(a) >> ((i) - 1), (i8x16){}), _mm_avg_epu16((u16x8)(b) >> ((i) - 1), (i8x16){}))
+	#define subsu8(a, b) (u8x16)_mm_subs_epu8(a, b)
+	#define trnlo32(a, b) (i32x4)_mm_shuffle_epi32((__m128i)_mm_shuffle_ps((__m128)(a), (__m128)(b), _MM_SHUFFLE(2, 0, 2, 0)), _MM_SHUFFLE(3, 1, 2, 0))
+	#define trnhi32(a, b) (i32x4)_mm_shuffle_epi32((__m128i)_mm_shuffle_ps((__m128)(a), (__m128)(b), _MM_SHUFFLE(3, 1, 3, 1)), _MM_SHUFFLE(3, 1, 2, 0))
+	#define unziplo32(a, b) (i32x4)_mm_shuffle_ps((__m128)(a), (__m128)(b), _MM_SHUFFLE(2, 0, 2, 0))
+	#define unziphi32(a, b) (i32x4)_mm_shuffle_ps((__m128)(a), (__m128)(b), _MM_SHUFFLE(3, 1, 3, 1))
+	#define ziplo8(a, b) (i8x16)_mm_unpacklo_epi8(a, b)
+	#define ziplo16(a, b) (i16x8)_mm_unpacklo_epi16(a, b)
+	#define ziplo32(a, b) (i32x4)_mm_unpacklo_epi32(a, b)
+	#define ziplo64(a, b) (i64x2)_mm_unpacklo_epi64(a, b)
+	#define ziphi8(a, b) (i8x16)_mm_unpackhi_epi8(a, b)
+	#define ziphi16(a, b) (i16x8)_mm_unpackhi_epi16(a, b)
+	#define ziphi32(a, b) (i32x4)_mm_unpackhi_epi32(a, b)
+	#define ziphi64(a, b) (i64x2)_mm_unpackhi_epi64(a, b)
+	static always_inline i16x8 cvthi8s16(i8x16 a) {return (i16x8)ziphi8(a, a) >> 8;}
+	static always_inline i32x4 cvthi16s32(i16x8 a) {return (i32x4)ziphi16(a, a) >> 16;}
+	#ifndef __wasm_simd128__
+		static always_inline size_t shld(size_t l, size_t h, size_t i) {asm("shld %%cl, %1, %0" : "+rm" (h) : "r" (l), "c" (i)); return h;}
+	#else
+		static always_inline size_t shld(size_t l, size_t h, int i) {return h << i | l >> 1 >> (~i & (SIZE_BIT - 1));}
+	#endif
+	static always_inline u16x8 sum8(u8x16 a) {u16x8 v = _mm_sad_epu8(a, (i8x16){}); return v + (u16x8)_mm_srli_si128(v, 8);}
+	#define maddxbs maddubs
+	#define maddubx (u16x8)maddubs
+	#ifdef __AVX2__
+		#define pow2x4(a) (u32x4)_mm_sllv_epi32(_mm_set1_epi32(1), a)
+	#else
+		#define pow2x4(a) (u32x4)_mm_cvttps_epi32((__m128)(((i32x4)(a) << 23) + (i32x4)_mm_set1_epi32(0x3f800000)))
+	#endif
+	#ifdef __SSE4_1__
+		#define cvtlo8u16(a) (i16x8)_mm_cvtepu8_epi16(a)
+		#define cvtlo8s16(a) (i16x8)_mm_cvtepi8_epi16(a)
+		#define cvtlo16u32(a) (i32x4)_mm_cvtepu16_epi32(a)
+		#define cvtlo16s32(a) (i32x4)_mm_cvtepi16_epi32(a)
+		#define ifelse_mask(v, t, f) (i8x16)_mm_blendv_epi8(f, t, v)
+		#define ifelse_msb(v, t, f) (i8x16)_mm_blendv_epi8(f, t, v)
+		#define min8(a, b) (i8x16)_mm_min_epi8(a, b)
+		#define max8(a, b) (i8x16)_mm_max_epi8(a, b)
+		static always_inline u32x4 minw32(u32x4 a, u32x4 b) { return (u32x4)_mm_blendv_ps((__m128)b, (__m128)a, (__m128)(a - b)); }
+	#else
+		#define cvtlo8u16(a) (i16x8)_mm_unpacklo_epi8(a, (i8x16){})
+		#define cvtlo16u32(a) (i32x4)_mm_unpacklo_epi16(a, (i16x8){})
+		static always_inline i16x8 cvtlo8s16(i8x16 a) {return (i16x8)_mm_unpacklo_epi8(a, a) >> 8;}
+		static always_inline i32x4 cvtlo16s32(i16x8 a) {return (i32x4)_mm_unpacklo_epi16(a, a) >> 16;}
+		static always_inline i8x16 ifelse_mask(i8x16 v, i8x16 t, i8x16 f) { return t & v | f & ~v; }
+		static always_inline i8x16 ifelse_msb(i8x16 v, i8x16 t, i8x16 f) { i8x16 m = (v < 0); return t & m | f & ~m; }
+		static always_inline i8x16 min8(i8x16 a, i8x16 b) { i8x16 v = b > a; return a & v | b & ~v; }
+		static always_inline i8x16 max8(i8x16 a, i8x16 b) { i8x16 v = a > b; return a & v | b & ~v; }
+		static always_inline u32x4 minw32(u32x4 a, u32x4 b) { i32x4 v = (i32x4)(a - b) < 0; return a & v | b & ~v; }
+	#endif
+	#ifdef __SSSE3__
+		static const int8_t shc_mask[48] = {
+			 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+			 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+			15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15};
+		#define abs8(a) (u8x16)_mm_abs_epi8(a)
+		#define abs16(a) (u16x8)_mm_abs_epi16(a)
+		#define hadd16(a, b) (i16x8)_mm_hadd_epi16(a, b)
+		#define maddubs(a, b) (i16x8)_mm_maddubs_epi16(a, b)
+		#define shrd128(l, h, i) (i8x16)_mm_alignr_epi8(h, l, i)
+		#define shlc128(a, i) (i8x16)_mm_shuffle_epi8(a, _mm_loadu_si128((__m128i*)(shc_mask + 16 - (i))))
+		#define shrc128(a, i) (i8x16)_mm_shuffle_epi8(a, _mm_loadu_si128((__m128i*)(shc_mask + 16 + (i))))
+		#define shlv128(a, i) (i8x16)_mm_shuffle_epi8(a, _mm_loadu_si128((__m128i*)(shz_mask + 16 - (i))))
+		#define shrv128(a, i) (i8x16)_mm_shuffle_epi8(a, _mm_loadu_si128((__m128i*)(shz_mask + 16 + (i))))
+		static always_inline i8x16 shuffle(i8x16 a, i8x16 m) { return (i8x16)_mm_shuffle_epi8(a, m); }
+		static always_inline i8x16 shufflen(i8x16 a, i8x16 m) {return (i8x16)_mm_shuffle_epi8(a, m) | (0 > m);}
+		static always_inline i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {return ifelse_mask(16 > m, _mm_shuffle_epi8(a, m), _mm_shuffle_epi8(b, m));}
+		static always_inline i8x16 shuffle3(const i8x16 *p, i8x16 m) {return ifelse_mask(16 > m, _mm_shuffle_epi8(p[0], m), ifelse_mask(32 > m, _mm_shuffle_epi8(p[1], m), _mm_shuffle_epi8(p[2], m)));}
+		#define shufflez shuffle
+		#define shuffle2z shuffle2
+	#else
+		#define shrd128(l, h, i) ((i8x16)_mm_srli_si128(l, i) | (i8x16)_mm_slli_si128(h, 16 - (i)))
+		#define shlc128(a, i) ({i8x16 _a = a; shrd128(_mm_shuffle_epi32(_mm_shufflelo_epi16(_mm_unpacklo_epi8(_a, _a), _MM_SHUFFLE(0, 0, 0, 0)), _MM_SHUFFLE(0, 0, 0, 0)), _a, 16 - (i));})
+		#define shrc128(a, i) ({i8x16 _a = a; shrd128(_a, _mm_shuffle_epi32(_mm_shufflehi_epi16(_mm_unpackhi_epi8(_a, _a), _MM_SHUFFLE(3, 3, 3, 3)), _MM_SHUFFLE(3, 3, 3, 3)), i);})
+		static always_inline u8x16 abs8(i8x16 a) { return _mm_min_epu8(-a, a); }
+		static always_inline u16x8 abs16(i16x8 a) { return _mm_max_epi16(-a, a); }
+		static inline i16x8 hadd16(i16x8 a, i16x8 b) { return _mm_packs_epi32((i32x4)((i16x8)((i32x4)a << 16) + a) >> 16, (i32x4)((i16x8)((i32x4)b << 16) + b) >> 16); }
+		static inline i16x8 maddubs(u8x16 a, i8x16 b) { return _mm_adds_epi16(((u16x8)a << 8 >> 8) * ((i16x8)b << 8 >> 8), ((u16x8)a >> 8) * ((i16x8)b >> 8)); }
+		// for SSE2 shlv/shrv we rely on defined behaviour for out-of-bounds shifts
+		static inline i8x16 shlv128(i8x16 a, int i) {i *= 8; u64x2 lo = _mm_slli_si128(a, 8); return _mm_sll_epi64(a, (i32x4){i}) | _mm_srl_epi64(lo, (i32x4){64 - i}) | _mm_sll_epi64(lo, (i32x4){i - 64});}
+		static inline i8x16 shrv128(i8x16 a, int i) {i *= 8; u64x2 hi = _mm_srli_si128(a, 8); return _mm_srl_epi64(a, (i32x4){i}) | _mm_sll_epi64(hi, (i32x4){64 - i}) | _mm_srl_epi64(hi, (i32x4){i - 64});}
+		// no way to make clang use __builtin_shufflevector, and GCC performs worse with __builtin_shuffle :(
+		static i8x16 shuffle(i8x16 a, i8x16 m) { m &= 15; return (i8x16){a[m[0]], a[m[1]], a[m[2]], a[m[3]], a[m[4]], a[m[5]], a[m[6]], a[m[7]], a[m[8]], a[m[9]], a[m[10]], a[m[11]], a[m[12]], a[m[13]], a[m[14]], a[m[15]]}; }
+		static i8x16 shufflen(i8x16 a, i8x16 m) {return shuffle(a, m) | (0 > m);}
+		static i8x16 shufflez(i8x16 a, i8x16 m) {return shuffle(a, m) & ~(0 > m);}
+		static i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {m &= 31; union {int8_t q[32]; i8x16 v[2];} p = {.v = {a, b}}; return (i8x16){p.q[m[0]], p.q[m[1]], p.q[m[2]], p.q[m[3]], p.q[m[4]], p.q[m[5]], p.q[m[6]], p.q[m[7]], p.q[m[8]], p.q[m[9]], p.q[m[10]], p.q[m[11]], p.q[m[12]], p.q[m[13]], p.q[m[14]], p.q[m[15]]};}
+		static i8x16 shuffle2z(i8x16 a, i8x16 b, i8x16 m) { return shuffle2(a, b, m) & ~(m < 0); }
+		static i8x16 shuffle3(const i8x16 *p, i8x16 m) {union { int8_t q[16]; i8x16 v; } _m = {.v = _mm_min_epu8(m, _mm_set1_epi8(47))}; for (int i = 0; i < 16; i++) _m.q[i] = ((int8_t *)p)[_m.q[i]]; return _m.v;}
+	#endif
+#elif SIMD == NEON
+	#define abs8(a) (u8x16)vabsq_s8(a)
+	#define adds16(a, b) (i16x8)vqaddq_s16(a, b)
+	#define abs16(a) (u16x8)vabsq_s16(a)
+	#define avgu8(a, b) (u8x16)vrhaddq_u8(a, b)
+	#define combine64(a, b) (i64x2)vcombine_s8(vget_low_s8(a), vget_high_s8(b))
+	#define cvtlo8u16(a) (u16x8)vmovl_u8(vget_low_u8(a))
+	#define cvtlo8s16(a) (i16x8)vmovl_s8(vget_low_s8(a))
+	#define cvtlo16u32(a) (u32x4)vmovl_u16(vget_low_u16(a))
+	#define cvtlo16s32(a) (i32x4)vmovl_s16(vget_low_s16(a))
+	#define ifelse_mask(v, t, f) (i8x16)vbslq_s8(v, t, f)
+	#define ifelse_msb(v, t, f) (i8x16)vbslq_s8((i8x16)(v) >> 7, t, f)
+	#define min8(a, b) (i8x16)vminq_s8(a, b)
+	#define max8(a, b) (i8x16)vmaxq_s8(a, b)
+	#define min16(a, b) (i16x8)vminq_s16(a, b)
+	#define max16(a, b) (i16x8)vmaxq_s16(a, b)
+	#define minu8(a, b) (u8x16)vminq_u8(a, b)
+	#define maxu8(a, b) (u8x16)vmaxq_u8(a, b)
+	#define pow2x4(a) (u32x4)vshlq_u32(vdupq_n_u32(1), a)
+	#define set8(i) (i8x16)vdupq_n_s8(i)
+	#define set16(i) (i16x8)vdupq_n_s16(i)
+	#define set32(i) (i32x4)vdupq_n_s32(i)
+	#define set64(i) (i64x2)vdupq_n_s64(i)
+	#define shl128(a, i) (i8x16)({i8x16 _a = (a); vextq_s8(_a, _a, 16 - (i));})
+	#define shr128(a, i) (i8x16)({i8x16 _a = (a); vextq_s8(_a, _a, i);})
+	#define shlc128(a, i) (i8x16)({i8x16 _a = (a); vextq_s8(broadcast8(_a, 0), _a, 16 - (i));})
+	#define shrc128(a, i) (i8x16)({i8x16 _a = (a); vextq_s8(_a, broadcast8(_a, 15), i);})
+	#define shrd128(l, h, i) (i8x16)vextq_s8(l, h, i)
+	#define shrlou16(a, i) (uint64_t)vshrn_n_u16(a, i)
+	#define shrrs16(a, i) (i16x8)vrshrq_n_s16(a, i)
+	#define shrru16(a, i) (i16x8)vrshrq_n_u16(a, i)
+	#define shlv128(a, i) shufflez(a, loadu128(shz_mask + 16 - (i)))
+	#define shrv128(a, i) shufflez(a, loadu128(shz_mask + 16 + (i)))
+	#define shrz128(a, i) (i8x16)vextq_s8(a, (i8x16){}, i)
+	#define subsu8(a, b) (u8x16)vqsubq_u8(a, b)
+	static always_inline i32x4 loadu32(const void *p) {i32x4 a = {}; memcpy(&a, p, 4); return a;}
+	static always_inline i64x2 loadu64(const void *p) {i64x2 a = {}; memcpy(&a, p, 8); return a;}
+	static always_inline i8x16 loadu128(const void *p) {i8x16 a = {}; memcpy(&a, p, 16); return a;}
+	static always_inline i32x4 loadu32x4(const void *p0, const void *p1, const void *p2, const void *p3) {i32x4 a; memcpy((int32_t*)&a, p0, 4); memcpy((int32_t*)&a + 1, p1, 4); memcpy((int32_t*)&a + 2, p2, 4); memcpy((int32_t*)&a + 3, p3, 4); return a;}
+	static always_inline i64x2 loadu64x2(const void *p0, const void *p1) {i64x2 a; memcpy((int64_t*)&a, p0, 8); memcpy((int64_t*)&a + 1, p1, 8); return a;}
+	static always_inline u32x4 minw32(u32x4 a, u32x4 b) {return vbslq_s8((i32x4)(a - b) >> 31, a, b);}
+	static always_inline unsigned movemask(i8x16 a) {u8x16 b = vshrq_n_u8(a, 7), c = vsraq_n_u16(b, b, 7), d = vsraq_n_u32(c, c, 14), e = vsraq_n_u64(d, d, 28); return e[0] | e[8] << 8;}
+	// FIXME look to optimize (int -> size_t, 63-i trick)
+	static always_inline size_t shld(size_t l, size_t h, int i) {return h << i | l >> 1 >> (~i & (SIZE_BIT - 1));}
+	#ifdef __aarch64__
+		#define broadcast8(a, i) (i8x16)vdupq_laneq_s8(a, i)
+		#define broadcast16(a, i) (i16x8)vdupq_laneq_s16(a, i)
+		#define broadcast32(a, i) (i32x4)vdupq_laneq_s32(a, i)
+		#define broadcast64(a, i) (i64x2)vdupq_laneq_s64(a, i)
+		#define cvtaddhi8u16(a, b) (u16x8)vaddl_high_u8(a, b)
+		#define cvthi8u16(a) (u16x8)vmovl_high_u8(a)
+		#define cvthi8s16(a) (u16x8)vmovl_high_s8(a)
+		#define cvthi16u32(a) (u32x4)vmovl_high_u16(a)
+		#define cvthi16s32(a) (i32x4)vmovl_high_s16(a)
+		#define hadd16(a, b) (i16x8)vpaddq_s16(a, b)
+		#define packs16(a, b) (i16x8)vqmovn_high_s16(vqmovn_s16(a), b)
+		#define packs32(a, b) (i16x8)vqmovn_high_s32(vqmovn_s32(a), b)
+		#define packus16(a, b) (u8x16)vqmovun_high_s16(vqmovun_s16(a), b)
+		#define shrrpu16(a, b, i) (u8x16)vqrshrn_high_n_u16(vqrshrn_n_u16(a, i), b, i)
+		#define shrpus16(a, b, i) (u8x16)vqshrun_high_n_s16(vqshrun_n_s16(a, i), b, i)
+		#define unziplo32(a, b) (i32x4)vuzp1q_s32(a, b)
+		#define unziphi32(a, b) (i32x4)vuzp2q_s32(a, b)
+		#define ziplo8(a, b) (i8x16)vzip1q_s8(a, b)
+		#define ziphi8(a, b) (i8x16)vzip2q_s8(a, b)
+		#define ziplo16(a, b) (i16x8)vzip1q_s16(a, b)
+		#define ziphi16(a, b) (i16x8)vzip2q_s16(a, b)
+		#define ziplo32(a, b) (i16x8)vzip1q_s32(a, b)
+		#define ziphi32(a, b) (i16x8)vzip2q_s32(a, b)
+		#define ziplo64(a, b) (i64x2)vzip1q_s64(a, b)
+		#define ziphi64(a, b) (i64x2)vzip2q_s64(a, b)
+		static always_inline u16x8 maddubx(u8x16 a, u8x16 b) {return vpaddq_s16(vmull_u8(vget_low_u8(a), vget_low_u8(b)), vmull_high_u8(a, b));}
+		static always_inline i16x8 maddxbs(i8x16 a, i8x16 b) {return vpaddq_s16(vmull_s8(vget_low_s8(a), vget_low_s8(b)), vmull_high_s8(a, b));}
+		// FIXME try again to macro it?
+		static always_inline i8x16 shuffle(i8x16 a, i8x16 m) {return vqtbl1q_s8(a, m);}
+		static always_inline i8x16 shufflen(i8x16 a, i8x16 m) {return vqtbx1q_s8(m, a, m);}
+		static always_inline i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {return vqtbl2q_s8((int8x16x2_t){a, b}, m);}
+		static always_inline i8x16 shuffle3(const i8x16 *p, i8x16 m) {return vqtbl3q_s8(*(int8x16x3_t *)p, m);}
+		static always_inline u16x8 sum8(u8x16 a) {u16x8 b; asm("uaddlv %h0, %1.16b" : "=w" (b) : "w" (a)); return b;}
+		static always_inline i32x4 trnlo32(i32x4 a, i32x4 b) {return vtrn1q_s32(a, b);}
+		static always_inline i32x4 trnhi32(i32x4 a, i32x4 b) {return vtrn2q_s32(a, b);}
+	#else
+		#define broadcast8(a, i) (i8x16)vdupq_lane_s8(__builtin_choose_expr((i) < 8, vget_low_s8(a), vget_high_s8(a)), (i) & 7)
+		#define broadcast16(a, i) (i16x8)vdupq_lane_s16(__builtin_choose_expr((i) < 4, vget_low_s16(a), vget_high_s16(a)), (i) & 3)
+		#define broadcast32(a, i) (i32x4)vdupq_lane_s32(__builtin_choose_expr((i) < 2, vget_low_s32(a), vget_high_s32(a)), (i) & 1)
+		#define broadcast64(a, i) (i64x2)vdupq_lane_s64(__builtin_choose_expr((i) < 1, vget_low_s64(a), vget_high_s64(a)), 0)
+		#define cvtaddhi8u16(a, b) vaddl_u8(vget_high_u8(a), vget_high_u8(b))
+		#define cvthi8u16(a) (u16x8)vmovl_u8(vget_high_u8(a))
+		#define cvthi8s16(a) (u16x8)vmovl_s8(vget_high_s8(a))
+		#define cvthi16u32(a) (u32x4)vmovl_u16(vget_high_u16(a))
+		#define cvthi16s32(a) (i32x4)vmovl_s16(vget_high_s16(a))
+		#define packs16(a, b) (i16x8)vcombine_s8(vqmovn_s16(a), vqmovn_s16(b))
+		#define packs32(a, b) (i16x8)vcombine_s16(vqmovn_s32(a), vqmovn_s32(b))
+		#define packus16(a, b) (u8x16)vcombine_u8(vqmovun_s16(a), vqmovun_s16(b))
+		#define shrrpu16(a, b, i) (u8x16)vcombine_u8(vqrshrn_n_u16(a, i), vqrshrn_n_u16(b, i))
+		#define shrpus16(a, b, i) (u8x16)vcombine_u8(vqshrun_n_s16(a, i), vqshrun_n_s16(b, i))
+		#define trnlo32(a, b) ((i32x4)vtrnq_s32(a, b).val[0])
+		#define trnhi32(a, b) ((i32x4)vtrnq_s32(a, b).val[1])
+		#define unziplo32(a, b) (i32x4)vuzpq_s32(a, b).val[0]
+		#define unziphi32(a, b) (i32x4)vuzpq_s32(a, b).val[1]
+		#define ziplo8(a, b) (i8x16)vzipq_s8(a, b).val[0]
+		#define ziphi8(a, b) (i8x16)vzipq_s8(a, b).val[1]
+		#define ziplo16(a, b) (i16x8)vzipq_s16(a, b).val[0]
+		#define ziphi16(a, b) (i16x8)vzipq_s16(a, b).val[1]
+		#define ziplo32(a, b) (i16x8)vzipq_s32(a, b).val[0]
+		#define ziphi32(a, b) (i16x8)vzipq_s32(a, b).val[1]
+		#define ziplo64(a, b) (i64x2)vcombine_s64(vget_low_s64(a), vget_low_s64(b))
+		#define ziphi64(a, b) (i64x2)vcombine_s64(vget_high_s64(a), vget_high_s64(b))
+		static always_inline i16x8 hadd16(i16x8 a, i16x8 b) {return vcombine_s16(vpadd_s16(vget_low_s16(a), vget_high_s16(a)), vpadd_s16(vget_low_s16(b), vget_high_s16(b)));}
+		static always_inline u16x8 maddubx(u8x16 a, u8x16 b) {u16x8 c = vmull_u8(vget_low_u8(a), vget_low_u8(b)); u16x8 d = vmull_u8(vget_high_u8(a), vget_high_u8(b)); return vcombine_s16(vpadd_s16(vget_low_s16(c), vget_high_s16(c)), vpadd_s16(vget_low_s16(d), vget_high_s16(d)));}
+		static always_inline i16x8 maddxbs(i8x16 a, i8x16 b) {i16x8 c = vmull_s8(vget_low_s8(a), vget_low_s8(b)); i16x8 d = vmull_s8(vget_high_s8(a), vget_high_s8(b)); return vcombine_s16(vpadd_s16(vget_low_s16(c), vget_high_s16(c)), vpadd_s16(vget_low_s16(d), vget_high_s16(d)));}
+		static always_inline i8x16 shuffle(i8x16 a, i8x16 m) {int8x8x2_t b = {vget_low_s8(a), vget_high_s8(a)}; return vcombine_s8(vtbl2_s8(b, vget_low_s8(m)), vtbl2_s8(b, vget_high_s8(m)));}
+		static always_inline i8x16 shufflen(i8x16 a, i8x16 m) {int8x8x2_t b = {vget_low_s8(a), vget_high_s8(a)}; return vcombine_s8(vtbx2_s8(vget_low_s8(m), b, vget_low_s8(m)), vtbx2_s8(vget_high_s8(m), b, vget_high_s8(m)));}
+		static always_inline i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {int8x8x4_t p = {vget_low_s8(a), vget_high_s8(a), vget_low_s8(b), vget_high_s8(b)}; return vcombine_s8(vtbl4_s8(p, vget_low_s8(m)), vtbl4_s8(p, vget_high_s8(m)));}
+		static inline i8x16 shuffle3(const i8x16 *p, i8x16 m) {i8x16 m16 = m - 16; int8x8x2_t a = *(int8x8x2_t *)p; int8x8x4_t b = *(int8x8x4_t *)(p + 1); return vcombine_s8(vtbx4_s8(vtbl2_s8(a, vget_low_s8(m)), b, vget_low_s8(m16)), vtbx4_s8(vtbl2_s8(a, vget_high_s8(m)), b, vget_high_s8(m16)));}
+		static inline u16x8 sum8(u8x16 a) {u16x8 b = vpaddlq_u8(a); u16x4 c = vadd_u16(vget_low_u16(b), vget_high_u16(b)); u16x4 d = vsra_n_u32(c, c, 16); return vcombine_u16((u16x4)vsra_n_u64((uint64x1_t)d, (uint64x1_t)d, 32), (u16x4){});}
+	#endif
+	#define shufflez shuffle
+	#define shuffle2z shuffle2
+#elif SIMD == WASM
+	#define abs8(a) (u8x16)wasm_i8x16_abs(a)
+	#define adds16(a, b) (i16x8)wasm_i16x8_add_sat(a, b)
+	#define abs16(a) (u16x8)wasm_i16x8_abs(a)
+	#define avgu8(a, b) (u8x16)wasm_u8x16_avgr(a, b)
+	// using shufflevector instead of wasm_i8x16_shuffle lets clang eliminate (i8x16){}
+	#define broadcast8(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i)
+	#define broadcast16(a, i) __builtin_shufflevector((i16x8)(a), (i16x8){}, i, i, i, i, i, i, i, i)
+	#define broadcast32(a, i) __builtin_shufflevector((i32x4)(a), (i32x4){}, i, i, i, i)
+	#define broadcast64(a, i) __builtin_shufflevector((i64x2)(a), (i64x2){}, i, i)
+	#define combine64(a, b) (i64x2)wasm_i64x2_shuffle(a, b, 0, 3)
+	#define cvtlo8u16(a) (u16x8)wasm_u16x8_extend_low_u8x16(a)
+	#define cvthi8u16(a) (u16x8)wasm_u16x8_extend_high_u8x16(a)
+	#define cvtlo8s16(a) (i16x8)wasm_i16x8_extend_low_i8x16(a)
+	#define cvthi8s16(a) (i16x8)wasm_i16x8_extend_high_i8x16(a)
+	#define cvtlo16u32(a) (u32x4)wasm_u32x4_extend_low_u16x8(a)
+	#define cvthi16u32(a) (u32x4)wasm_u32x4_extend_high_u16x8(a)
+	#define cvtlo16s32(a) (i32x4)wasm_i32x4_extend_low_i16x8(a)
+	#define cvthi16s32(a) (i32x4)wasm_i32x4_extend_high_i16x8(a)
+	#define hadd16(a, b) (i16x8)wasm_i16x8_narrow_i32x4(wasm_i32x4_extadd_pairwise_i16x8(a), wasm_i32x4_extadd_pairwise_i16x8(b))
+	#define loadu32(p) (i32x4)wasm_v128_load32_zero(p)
+	#define loadu64(p) (i64x2)wasm_v128_load64_zero(p)
+	#define loadu128(p) (i8x16)wasm_v128_load(p)
+	#define loadu32x4(p0, p1, p2, p3) (i32x4)wasm_v128_load32_lane(p3, wasm_v128_load32_lane(p2, wasm_v128_load32_lane(p1, wasm_v128_load32_zero(p0), 1), 2), 3)
+	#define loadu64x2(p0, p1) (i64x2)wasm_v128_load64_lane(p1, wasm_v128_load64_zero(p0), 1)
+	#define min8(a, b) (i8x16)wasm_i8x16_min(a, b)
+	#define max8(a, b) (i8x16)wasm_i8x16_max(a, b)
+	#define min16(a, b) (i16x8)wasm_i16x8_min(a, b)
+	#define max16(a, b) (i16x8)wasm_i16x8_max(a, b)
+	#define minu8(a, b) (u8x16)wasm_u8x16_min(a, b)
+	#define maxu8(a, b) (u8x16)wasm_u8x16_max(a, b)
+	#define movemask(a) wasm_i8x16_bitmask(a)
+	#define packs16(a, b) (i8x16)wasm_i8x16_narrow_i16x8(a, b)
+	#define packs32(a, b) (i16x8)wasm_i16x8_narrow_i32x4(a, b)
+	#define packus16(a, b) (i8x16)wasm_u8x16_narrow_i16x8(a, b)
+	#define pow2x4(a) (u32x4)wasm_u32x4_trunc_sat_f32x4(((u32x4)(a) << 23) + (u32x4)wasm_i32x4_splat(0x3f800000))
+	#define set8(i) (i8x16)wasm_i8x16_splat(i)
+	#define set16(i) (i16x8)wasm_i16x8_splat(i)
+	#define set32(i) (i32x4)wasm_i32x4_splat(i)
+	#define set64(i) (i64x2)wasm_i64x2_splat(i)
+	// if we use -1 here clang puts 0 which is much less efficient
+	#define shl128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (0 - (i)) & 15, (1 - (i)) & 15, (2 - (i)) & 15, (3 - (i)) & 15, (4 - (i)) & 15, (5 - (i)) & 15, (6 - (i)) & 15, (7 - (i)) & 15, (8 - (i)) & 15, (9 - (i)) & 15, (10 - (i)) & 15, (11 - (i)) & 15, (12 - (i)) & 15, (13 - (i)) & 15, (14 - (i)) & 15, (15 - (i)) & 15)
+	#define shr128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (0 + (i)) & 15, (1 + (i)) & 15, (2 + (i)) & 15, (3 + (i)) & 15, (4 + (i)) & 15, (5 + (i)) & 15, (6 + (i)) & 15, (7 + (i)) & 15, (8 + (i)) & 15, (9 + (i)) & 15, (10 + (i)) & 15, (11 + (i)) & 15, (12 + (i)) & 15, (13 + (i)) & 15, (14 + (i)) & 15, (15 + (i)) & 15)
+	#define shlc128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (i) > 0 ? 0 : 0 - (i), (i) > 1 ? 0 : 1 - (i), (i) > 2 ? 0 : 2 - (i), (i) > 3 ? 0 : 3 - (i), (i) > 4 ? 0 : 4 - (i), (i) > 5 ? 0 : 5 - (i), (i) > 6 ? 0 : 6 - (i), (i) > 7 ? 0 : 7 - (i), (i) > 8 ? 0 : 8 - (i), (i) > 9 ? 0 : 9 - (i), (i) > 10 ? 0 : 10 - (i), (i) > 11 ? 0 : 11 - (i), (i) > 12 ? 0 : 12 - (i), (i) > 13 ? 0 : 13 - (i), (i) > 14 ? 0 : 14 - (i), (i) > 15 ? 0 : 15 - (i))
+	#define shrc128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (i) > 15 ? 15 : (i) + 0, (i) > 14 ? 15 : (i) + 1, (i) > 13 ? 15 : (i) + 2, (i) > 12 ? 15 : (i) + 3, (i) > 11 ? 15 : (i) + 4, (i) > 10 ? 15 : (i) + 5, (i) > 9 ? 15 : (i) + 6, (i) > 8 ? 15 : (i) + 7, (i) > 7 ? 15 : (i) + 8, (i) > 6 ? 15 : (i) + 9, (i) > 5 ? 15 : (i) + 10, (i) > 4 ? 15 : (i) + 11, (i) > 3 ? 15 : (i) + 12, (i) > 2 ? 15 : (i) + 13, (i) > 1 ? 15 : (i) + 14, (i) > 0 ? 15 : (i) + 15)
+	#define shrd128(l, h, i) (i8x16)wasm_i8x16_shuffle(l, h, 0 + (i), 1 + (i), 2 + (i), 3 + (i), 4 + (i), 5 + (i), 6 + (i), 7 + (i), 8 + (i), 9 + (i), 10 + (i), 11 + (i), 12 + (i), 13 + (i), 14 + (i), 15 + (i))
+	#define shrlou16(a, i) (uint64_t)__builtin_convertvector((u16x8)(a) >> (i), u8x8)
+	#define shrpus16(a, b, i) (u8x16)wasm_u8x16_narrow_i16x8((i16x8)(a) >> (i), (i16x8)(b) >> (i))
+	#define shrrpu16(a, b, i) (u8x16)wasm_u8x16_narrow_i16x8(((u16x8)(a) + (1 << ((i) - 1))) >> (i), ((u16x8)(b) + (1 << ((i) - 1))) >> (i))
+	#define shrrs16(a, i) (((i16x8)(a) + (1 << ((i) - 1))) >> (i))
+	#define shrru16(a, i) (((u16x8)(a) + (1 << ((i) - 1))) >> (i))
+	#define shlv128(a, i) (i8x16)wasm_i8x16_swizzle(a, loadu128(shz_mask + 16 - (i)))
+	#define shrv128(a, i) (i8x16)wasm_i8x16_swizzle(a, loadu128(shz_mask + 16 + (i)))
+	#define shrz128(a, i) (i8x16)wasm_i8x16_shuffle(a, (i8x16){}, 0 + (i), 1 + (i), 2 + (i), 3 + (i), 4 + (i), 5 + (i), 6 + (i), 7 + (i), 8 + (i), 9 + (i), 10 + (i), 11 + (i), 12 + (i), 13 + (i), 14 + (i), 15 + (i))
+	#define subsu8(a, b) (u8x16)wasm_u8x16_sub_sat(a, b)
+	#define trnlo32(a, b) (i32x4)wasm_i32x4_shuffle(a, b, 0, 4, 2, 6)
+	#define trnhi32(a, b) (i32x4)wasm_i32x4_shuffle(a, b, 1, 5, 3, 7)
+	#define unziplo32(a, b) (i32x4)wasm_i32x4_shuffle(a, b, 0, 2, 4, 6)
+	#define unziphi32(a, b) (i32x4)wasm_i32x4_shuffle(a, b, 1, 3, 5, 7)
+	#define ziplo8(a, b) (i8x16)wasm_i8x16_shuffle(a, b, 0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23)
+	#define ziphi8(a, b) (i8x16)wasm_i8x16_shuffle(a, b, 8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31)
+	#define ziplo16(a, b) (i16x8)wasm_i16x8_shuffle(a, b, 0, 8, 1, 9, 2, 10, 3, 11)
+	#define ziphi16(a, b) (i16x8)wasm_i16x8_shuffle(a, b, 4, 12, 5, 13, 6, 14, 7, 15)
+	#define ziplo32(a, b) (i16x8)wasm_i32x4_shuffle(a, b, 0, 4, 1, 5)
+	#define ziphi32(a, b) (i16x8)wasm_i32x4_shuffle(a, b, 2, 6, 3, 7)
+	#define ziplo64(a, b) (i64x2)wasm_i64x2_shuffle(a, b, 0, 2)
+	#define ziphi64(a, b) (i64x2)wasm_i64x2_shuffle(a, b, 1, 3)
+	// relaxed_dot missed an unsigned version! (using signed saturation here for better SSE2 support)
+	static u16x8 maddubx(u8x16 a, u8x16 b) {return wasm_i16x8_narrow_i32x4(wasm_u32x4_extadd_pairwise_u16x8(wasm_u16x8_extmul_low_u8x16(a, b)), wasm_u32x4_extadd_pairwise_u16x8(wasm_u16x8_extmul_high_u8x16(a, b)));}
+	static u32x4 minw32(u32x4 a, u32x4 b) {return wasm_v128_bitselect(a, b, (i32x4)(a - b) >> 31);}
+	static inline size_t shld(size_t l, size_t h, size_t i) {return h << i | l >> 1 >> (~i & (SIZE_BIT - 1));}
+	#define shufflez shuffle
+	#define shuffle2z shuffle2
+	#if defined(__clang__) && __clang_major__ >= 14
+		#define sum8(a) ((u16x8){__builtin_reduce_add(__builtin_convertvector((u8x16)(a), u16x16))})
+	#else
+		static u16x8 sum8(u8x16 a) {u16x8 b = wasm_u32x4_extadd_pairwise_u16x8(wasm_u16x8_extadd_pairwise_u8x16(a)); u16x8 c = b + (u16x8)((u64x2)b >> 32); return c + (u16x8)shr128(c, 8);}
+	#endif
+	#ifdef __wasm_relaxed_simd__
+		#define ifelse_mask(v, t, f) (i8x16)wasm_i8x16_relaxed_laneselect(t, f, v)
+		#define ifelse_msb(v, t, f) (i8x16)wasm_i8x16_relaxed_laneselect(t, f, (i8x16)(v) >> 7)
+		#define maddxbs(a, b) (i16x8)wasm_i16x8_relaxed_dot_i8x16_i7x16(b, a)
+		static always_inline i8x16 shuffle(i8x16 a, i8x16 m) {return wasm_i8x16_relaxed_swizzle(a, m);}
+		static i8x16 shufflen(i8x16 a, i8x16 m) {return wasm_i8x16_relaxed_swizzle(a, m) | (0 > m);}
+		static i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {return wasm_i8x16_swizzle(a, m) | wasm_i8x16_relaxed_swizzle(b, m - 16);}
+		static i8x16 shuffle3(const i8x16 *p, i8x16 m) {return wasm_i8x16_swizzle(p[0], m) | wasm_i8x16_swizzle(p[1], m - 16) | wasm_i8x16_relaxed_swizzle(p[2], m - 32);}
+	#else
+		#define ifelse_mask(v, t, f) (i8x16)wasm_v128_bitselect(t, f, v)
+		#define ifelse_msb(v, t, f) (i8x16)wasm_v128_bitselect(t, f, (i8x16)(v) >> 7)
+		// maddubs original polyfill is awful for NEON -> favor the shortest WASM code
+		static i16x8 maddxbs(i8x16 a, i8x16 b) {return wasm_i16x8_narrow_i32x4(wasm_i32x4_extadd_pairwise_i16x8(wasm_i16x8_extmul_low_i8x16(a, b)), wasm_i32x4_extadd_pairwise_i16x8(wasm_i16x8_extmul_high_i8x16(a, b)));}
+		static always_inline i8x16 shuffle(i8x16 a, i8x16 m) {return wasm_i8x16_swizzle(a, m);}
+		static i8x16 shufflen(i8x16 a, i8x16 m) {return wasm_i8x16_swizzle(a, m) | (0 > m);}
+		static i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {return wasm_i8x16_swizzle(a, m) | wasm_i8x16_swizzle(b, m - 16);}
+		static i8x16 shuffle3(const i8x16 *p, i8x16 m) {return wasm_i8x16_swizzle(p[0], m) | wasm_i8x16_swizzle(p[1], m - 16) | wasm_i8x16_swizzle(p[2], m - 32);}
+	#endif
+#elif SIMD == CLANG
+	// prefer functions for non-trivial macros since they may compile on a non-SIMD CPU
+	#define abs8(a) __builtin_elementwise_abs((i8x16)(a))
+	#define abs16(a) __builtin_elementwise_abs((i16x8)(a))
+	#define adds16(a, b) __builtin_elementwise_add_sat((i16x8)(a), (i16x8)(b))
+	#define broadcast8(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i)
+	#define broadcast16(a, i) __builtin_shufflevector((i16x8)(a), (i16x8){}, i, i, i, i, i, i, i, i)
+	#define broadcast32(a, i) __builtin_shufflevector((i32x4)(a), (i32x4){}, i, i, i, i)
+	#define broadcast64(a, i) __builtin_shufflevector((i64x2)(a), (i64x2){}, i, i)
+	#define combine64(a, b) __builtin_shufflevector((i64x2)(a), (i64x2)(b), 0, 3)
+	#define min8(a, b) __builtin_elementwise_min((i8x16)(a), (i8x16)(b))
+	#define max8(a, b) __builtin_elementwise_max((i8x16)(a), (i8x16)(b))
+	#define min16(a, b) __builtin_elementwise_min((i16x8)(a), (i16x8)(b))
+	#define max16(a, b) __builtin_elementwise_max((i16x8)(a), (i16x8)(b))
+	#define minu8(a, b) __builtin_elementwise_min((u8x16)(a), (u8x16)(b))
+	#define maxu8(a, b) __builtin_elementwise_max((u8x16)(a), (u8x16)(b))
+	#define shl128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (i) > 0 ? -1 : 0 - (i), (i) > 1 ? -1 : 1 - (i), (i) > 2 ? -1 : 2 - (i), (i) > 3 ? -1 : 3 - (i), (i) > 4 ? -1 : 4 - (i), (i) > 5 ? -1 : 5 - (i), (i) > 6 ? -1 : 6 - (i), (i) > 7 ? -1 : 7 - (i), (i) > 8 ? -1 : 8 - (i), (i) > 9 ? -1 : 9 - (i), (i) > 10 ? -1 : 10 - (i), (i) > 11 ? -1 : 11 - (i), (i) > 12 ? -1 : 12 - (i), (i) > 13 ? -1 : 13 - (i), (i) > 14 ? -1 : 14 - (i), (i) > 15 ? -1 : 15 - (i))
+	#define shr128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (i) > 15 ? -1 : 0 + (i), (i) > 14 ? -1 : 1 + (i), (i) > 13 ? -1 : 2 + (i), (i) > 12 ? -1 : 3 + (i), (i) > 11 ? -1 : 4 + (i), (i) > 10 ? -1 : 5 + (i), (i) > 9 ? -1 : 6 + (i), (i) > 8 ? -1 : 7 + (i), (i) > 7 ? -1 : 8 + (i), (i) > 6 ? -1 : 9 + (i), (i) > 5 ? -1 : 10 + (i), (i) > 4 ? -1 : 11 + (i), (i) > 3 ? -1 : 12 + (i), (i) > 2 ? -1 : 13 + (i), (i) > 1 ? -1 : 14 + (i), (i) > 0 ? -1 : 15 + (i))
+	#define shlc128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (i) > 0 ? 0 : 0 - (i), (i) > 1 ? 0 : 1 - (i), (i) > 2 ? 0 : 2 - (i), (i) > 3 ? 0 : 3 - (i), (i) > 4 ? 0 : 4 - (i), (i) > 5 ? 0 : 5 - (i), (i) > 6 ? 0 : 6 - (i), (i) > 7 ? 0 : 7 - (i), (i) > 8 ? 0 : 8 - (i), (i) > 9 ? 0 : 9 - (i), (i) > 10 ? 0 : 10 - (i), (i) > 11 ? 0 : 11 - (i), (i) > 12 ? 0 : 12 - (i), (i) > 13 ? 0 : 13 - (i), (i) > 14 ? 0 : 14 - (i), (i) > 15 ? 0 : 15 - (i))
+	#define shrc128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, (i) > 15 ? 15 : (i) + 0, (i) > 14 ? 15 : (i) + 1, (i) > 13 ? 15 : (i) + 2, (i) > 12 ? 15 : (i) + 3, (i) > 11 ? 15 : (i) + 4, (i) > 10 ? 15 : (i) + 5, (i) > 9 ? 15 : (i) + 6, (i) > 8 ? 15 : (i) + 7, (i) > 7 ? 15 : (i) + 8, (i) > 6 ? 15 : (i) + 9, (i) > 5 ? 15 : (i) + 10, (i) > 4 ? 15 : (i) + 11, (i) > 3 ? 15 : (i) + 12, (i) > 2 ? 15 : (i) + 13, (i) > 1 ? 15 : (i) + 14, (i) > 0 ? 15 : (i) + 15)
+	#define shrd128(l, h, i) __builtin_shufflevector((i8x16)(l), (i8x16)(h), 0 + (i), 1 + (i), 2 + (i), 3 + (i), 4 + (i), 5 + (i), 6 + (i), 7 + (i), 8 + (i), 9 + (i), 10 + (i), 11 + (i), 12 + (i), 13 + (i), 14 + (i), 15 + (i))
+	#define shrlou16(a, i) (uint64_t)__builtin_convertvector((u16x8)(a) >> (i), u8x8)
+	#define shrz128(a, i) __builtin_shufflevector((i8x16)(a), (i8x16){}, 0 + (i), 1 + (i), 2 + (i), 3 + (i), 4 + (i), 5 + (i), 6 + (i), 7 + (i), 8 + (i), 9 + (i), 10 + (i), 11 + (i), 12 + (i), 13 + (i), 14 + (i), 15 + (i))
+	#define subsu8(a, b) (u8x16)__builtin_elementwise_sub_sat((u8x16)(a), (u8x16)(b))
+	#define sum8(a) ((u16x8){__builtin_reduce_add(__builtin_convertvector((u8x16)(a), u16x16))})
+	#define trnlo32(a, b) __builtin_shufflevector((i32x4)(a), (i32x4)(b), 0, 4, 2, 6)
+	#define trnhi32(a, b) __builtin_shufflevector((i32x4)(a), (i32x4)(b), 1, 5, 3, 7)
+	#define unziplo32(a, b) __builtin_shufflevector((i32x4)(a), (i32x4)(b), 0, 2, 4, 6)
+	#define unziphi32(a, b) __builtin_shufflevector((i32x4)(a), (i32x4)(b), 1, 3, 5, 7)
+	#define ziplo8(a, b) __builtin_shufflevector((i8x16)(a), (i8x16)(b), 0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23)
+	#define ziphi8(a, b) __builtin_shufflevector((i8x16)(a), (i8x16)(b), 8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31)
+	#define ziplo16(a, b) __builtin_shufflevector((i16x8)(a), (i16x8)(b), 0, 8, 1, 9, 2, 10, 3, 11)
+	#define ziphi16(a, b) __builtin_shufflevector((i16x8)(a), (i16x8)(b), 4, 12, 5, 13, 6, 14, 7, 15)
+	#define ziplo32(a, b) __builtin_shufflevector((i32x4)(a), (i32x4)(b), 0, 4, 1, 5)
+	#define ziphi32(a, b) __builtin_shufflevector((i32x4)(a), (i32x4)(b), 2, 6, 3, 7)
+	#define ziplo64(a, b) __builtin_shufflevector((i64x2)(a), (i64x2)(b), 0, 2)
+	#define ziphi64(a, b) __builtin_shufflevector((i64x2)(a), (i64x2)(b), 1, 3)
+	static inline i8x16 ifelse_mask(i8x16 v, i8x16 t, i8x16 f) {return t & v | f & ~v;}
+	static inline i8x16 set8(int i) {return (i8x16){i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i};}
+	static inline i16x8 set16(int i) {return (i16x8){i, i, i, i, i, i, i, i};}
+	static inline i32x4 set32(int i) {return (i32x4){i, i, i, i};}
+	static inline i64x2 set64(int64_t i) {return (i64x2){i, i};}
+	// clang lacks a non-const shuffle builtin, but can detect it here fortunately
+	static inline i8x16 shuffle(i8x16 a, i8x16 m) {m &= 15; return (i8x16){a[m[0]], a[m[1]], a[m[2]], a[m[3]], a[m[4]], a[m[5]], a[m[6]], a[m[7]], a[m[8]], a[m[9]], a[m[10]], a[m[11]], a[m[12]], a[m[13]], a[m[14]], a[m[15]]}; }
+	static inline i8x16 shufflen(i8x16 a, i8x16 m) {return shuffle(a, m) | (m < 0);}
+	static inline i8x16 shufflez(i8x16 a, i8x16 m) {return shuffle(a, m) & ~(m < 0);}
+	static u8x16 avgu8(u8x16 a, u8x16 b) {return (a >> 1) + (b >> 1) + ((a | b) & 1);}
+	static u16x8 cvtlo8u16(u8x16 a) {return __builtin_convertvector((u8x8){a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]}, u16x8);}
+	static u16x8 cvthi8u16(u8x16 a) {return __builtin_convertvector((u8x8){a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15]}, u16x8);}
+	static i16x8 cvtlo8s16(i8x16 a) {return __builtin_convertvector((i8x8){a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]}, i16x8);}
+	static i16x8 cvthi8s16(i8x16 a) {return __builtin_convertvector((i8x8){a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15]}, i16x8);}
+	static u32x4 cvtlo16u32(u16x8 a) {return __builtin_convertvector((u16x4){a[0], a[1], a[2], a[3]}, u32x4);}
+	static u32x4 cvthi16u32(u16x8 a) {return __builtin_convertvector((u16x4){a[4], a[5], a[6], a[7]}, u32x4);}
+	static i32x4 cvtlo16s32(i16x8 a) {return __builtin_convertvector((i16x4){a[0], a[1], a[2], a[3]}, i32x4);}
+	static i32x4 cvthi16s32(i16x8 a) {return __builtin_convertvector((i16x4){a[4], a[5], a[6], a[7]}, i32x4);}
+	static i16x8 hadd16(i16x8 a, i16x8 b) {return (i16x8){a[0] + a[1], a[2] + a[3], a[4] + a[5], a[6] + a[7], b[0] + b[1], b[2] + b[3], b[4] + b[5], b[6] + b[7]};}
+	static i8x16 ifelse_msb(i8x16 v, i8x16 t, i8x16 f) {i8x16 m = (v < 0); return t & m | f & ~m;}
+	static i32x4 loadu32(const void *p) {i32x4 v = {}; memcpy(&v, p, 4); return v;}
+	static i64x2 loadu64(const void *p) {i64x2 v = {}; memcpy(&v, p, 8); return v;}
+	static i8x16 loadu128(const void *p) {i8x16 v = {}; memcpy(&v, p, 16); return v;}
+	static i32x4 loadu32x4(const void *p0, const void *p1, const void *p2, const void *p3) {i32x4 v; memcpy((int32_t*)&v, p0, 4); memcpy((int32_t*)&v + 1, p1, 4); memcpy((int32_t*)&v + 2, p2, 4); memcpy((int32_t*)&v + 3, p3, 4); return v;}
+	static i64x2 loadu64x2(const void *p0, const void *p1) {i64x2 v; memcpy((int64_t*)&v, p0, 8); memcpy((int64_t*)&v + 1, p1, 8); return v;}
+	static i16x8 maddubs(u8x16 a, i8x16 b) {return __builtin_elementwise_add_sat((i16x8)((u16x8)a << 8 >> 8) * ((i16x8)b << 8 >> 8), (i16x8)((u16x8)a >> 8) * ((i16x8)b >> 8));}
+	static u32x4 minw32(u32x4 a, u32x4 b) {return ifelse_mask((i32x4)(a - b) >> 31, a, b);}
+	static int movemask(i8x16 a) {return __builtin_reduce_add((u16x16)__builtin_convertvector(a >> 7, i16x16) & (u16x16){1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768});}
+	static u32x4 pow2x4(i32x4 a) {return (a >= 0) & (u32x4)set32(1) << (a & 31);}
+	static i8x16 packs16(i16x8 a, i16x8 b) {i16x8 lo = set16(-128), hi = set16(127); a = __builtin_elementwise_min(__builtin_elementwise_max(a, lo), hi); b = __builtin_elementwise_min(__builtin_elementwise_max(b, lo), hi); return __builtin_convertvector((i16x16){a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]}, i8x16);}
+	static i16x8 packs32(i32x4 a, i32x4 b) {i32x4 lo = set32(-32768), hi = set32(32767); a = __builtin_elementwise_min(__builtin_elementwise_max(a, lo), hi); b = __builtin_elementwise_min(__builtin_elementwise_max(b, lo), hi); return __builtin_convertvector((i32x8){a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]}, i16x8);}
+	static u8x16 packus16(i16x8 a, i16x8 b) {i16x8 lo = set16(0), hi = set16(255); a = __builtin_elementwise_min(__builtin_elementwise_max(a, lo), hi); b = __builtin_elementwise_min(__builtin_elementwise_max(b, lo), hi); return __builtin_convertvector((u16x16){a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]}, u8x16);}
+	static size_t shld(size_t l, size_t h, size_t i) {return h << i | l >> 1 >> (~i & (SIZE_BIT - 1));}
+	static i8x16 shlv128(i8x16 a, int i) {return shufflez(a, loadu128(shz_mask + 16 - i));}
+	static i8x16 shrv128(i8x16 a, int i) {return shufflez(a, loadu128(shz_mask + 16 + i));}
+	static i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {return ifelse_mask(m < 16, shuffle(a, m), shuffle(b, m - 16));}
+	static i8x16 shuffle2z(i8x16 a, i8x16 b, i8x16 m) { return shuffle2(a, b, m) & ~(m < 0); }
+	static i8x16 shuffle3(const i8x16 *p, i8x16 m) {return ifelse_mask(m > 15, ifelse_mask(m > 31, shuffle(p[2], m), shuffle(p[1], m)), shuffle(p[0], m));}
+	static i16x8 shrrs16(i16x8 a, int i) {return (a + set16(1 << (i - 1))) >> i;}
+	static u16x8 shrru16(u16x8 a, int i) {return (a + set16(1 << (i - 1))) >> i;}
+	static u8x16 shrpus16(i16x8 a, i16x8 b, int i) {return packus16(a >> i, b >> i);}
+	static u8x16 shrrpu16(u16x8 a, u16x8 b, int i) {u16x8 o = set16(1 << (i - 1)), hi = set16(255), c = __builtin_elementwise_min((a + o) >> i, hi), d = __builtin_elementwise_min((b + o) >> i, hi); return __builtin_convertvector((u16x16){c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]}, u8x16);}
+	#define maddxbs maddubs
+	#define maddubx (u16x8)maddubs
+#endif
+
+
+
+/**
+ * Helper functions
+ */
+// MinGW's <stdlib.h> (included above) defines untyped min/max macros;
+// guarding with #ifndef would silently substitute them for the typed
+// helpers below and break every caller that relies on the unsigned ->
+// int round-trip, most damagingly the se(v) sign mapping in get_se16
+// (negative values then compare unsigned and clamp to the upper bound,
+// corrupting QPs, deblocking offsets and POCs on Windows builds).
+#undef min
+#undef max
+static always_inline int min(int a, int b) { return (a < b) ? a : b; }
+static always_inline int max(int a, int b) { return (a > b) ? a : b; }
+static always_inline unsigned minu(unsigned a, unsigned b) { return (a < b) ? a : b; }
+static always_inline unsigned maxu(unsigned a, unsigned b) { return (a > b) ? a : b; }
+// min on values that may wrap around (PicOrderCnt)
+static always_inline unsigned minw(unsigned a, unsigned b) { return (int)(a - b) < 0 ? a : b; }
+// compatible with any of the pointers wrapping around
+static always_inline void *minp(const void *a, const void *b) { return (void *)(a < b ? a : b); }
+static always_inline int clip3(int a, int b, int c) { return min(max(c, a), b); }
+static always_inline i16x8 median16(i16x8 a, i16x8 b, i16x8 c) {
+	return max16(min16(max16(a, b), c), min16(a, b));
+}
+static always_inline i8x16 pack_absMvd(i16x8 a) {
+	i16x8 x = broadcast32(a, 0);
+	return abs8(packs16(x, x));
+}
+// Bits left to read before the end of the NAL, negative once the reader overran
+// it - in 64 bits, since a reader on a damaged NAL may be far past its end.
+static always_inline int64_t bits_left(Edge264MvcGetBits *gb) {
+	return (int64_t)(gb->end - gb->CPB) * 8 + SIZE_BIT * 2 - 1 - ctz(gb->lsb_cache);
+}
+static always_inline int rbsp_end(Edge264MvcGetBits *gb, int trailing_bit) {
+	int64_t bits_to_end = bits_left(gb) - trailing_bit;
+	// all bits after trailing set bit must be zero AND there must be 0-7 bits left before end (0 for no trailing bit)
+	return gb->msb_cache == (size_t)trailing_bit << (SIZE_BIT - 1) &&
+	       (gb->lsb_cache & (gb->lsb_cache - 1)) == 0 &&
+	       (uint64_t)bits_to_end <= 7u * trailing_bit;
+}
+#ifndef __builtin_clzg // works as long as __builtin_clzg is a macro
+	static always_inline int __builtin_clzg(unsigned a, int b) { return a ? __builtin_clz(a) : b; }
+#endif
+#ifdef __BMI2__ // FIXME and not AMD pre-Zen3
+	#include <immintrin.h>
+	static always_inline int extract_neighbours(unsigned f) { return _pext_u32(f, 0x27); }
+	static always_inline int mvd_flags2ref_idx(unsigned f) { return _pext_u32(f, 0x11111111); }
+#else
+	static always_inline int extract_neighbours(unsigned f) {
+		return (f & 7) | (f >> 2 & 8);
+	}
+	static always_inline int mvd_flags2ref_idx(unsigned f) {
+		int a = f & 0x11111111;
+		int b = a | a >> 3;
+		int c = b | b >> 6;
+		return (c & 0xf) | (c >> 12 & 0xf0);
+	}
+#endif
+static FrameMask refs_to_mask(Edge264MvcTask *t) {
+	FrameMask refs = 0;
+	for (int i = 0; i < 64; i++) {
+		int pic = t->RefPicList[i >> 5][i & 31];
+		if (pic >= 0)
+			refs |= (FrameMask)1 << pic;
+	}
+	// a frame picture reads both fields of a reference held as fields
+	if (t->interlaced && !t->field_pic_flag)
+		refs |= refs << FIELD_ID;
+	return refs;
+}
+// Offset of the chroma plane of picture pic from its luma plane, which a bottom
+// field of an interlaced stream starts one row below the top field in both.
+#define PLANE_C(t, pic) ((t)->plane_size_Y + ((pic) >= FIELD_ID) * (t)->field_C_adjust)
+// The slots of a mask of pictures, with the bottom fields of interlaced
+// streams folded onto their slots (see FIELD_ID).
+static always_inline FrameMask slot_bits(Edge264MvcDecoder *dec, FrameMask m) {
+	return dec->interlaced ? (m | m >> FIELD_ID) & (((FrameMask)1 << FIELD_ID) - 1) : m;
+}
+// The slots taken by a mask of pictures, and in interlaced streams those from
+// FIELD_ID on, which are never allocated.
+static always_inline FrameMask slots_of(Edge264MvcDecoder *dec, FrameMask m) {
+	return dec->interlaced ? slot_bits(dec, m) | ~(((FrameMask)1 << FIELD_ID) - 1) : m;
+}
+// PicOrderCnt of the frame in slot i (8-1), the lower of its fields in
+// interlaced streams (the top field alone otherwise, as frames come out).
+static always_inline int32_t frame_poc(const Edge264MvcDecoder *dec, int i) {
+	return dec->interlaced ? minw(dec->FieldOrderCnt[0][i], dec->FieldOrderCnt[1][i]) : dec->FieldOrderCnt[0][i];
+}
+// A frame is complete once its frame picture or both of its fields are.
+static always_inline int frame_complete(Edge264MvcDecoder *dec, int pic) {
+	return __atomic_load_n(&dec->next_deblock_addr[pic], __ATOMIC_ACQUIRE) == INT_MAX &&
+		(!dec->interlaced || __atomic_load_n(&dec->next_deblock_addr[pic + FIELD_ID], __ATOMIC_ACQUIRE) == INT_MAX);
+}
+// One past the highest slot that scans of all slots visit: frame_slots, which
+// interlaced streams bound to the slots below FIELD_ID (a progressive sequence
+// before a format change may have left it higher, and the field of slot i is
+// i + FIELD_ID).
+static always_inline int scanned_slots(Edge264MvcDecoder *c) {
+	int n = __atomic_load_n(&c->frame_slots, __ATOMIC_RELAXED);
+	return c->interlaced ? min(n, FIELD_ID) : n;
+}
+static always_inline FrameMask ready_frames(Edge264MvcDecoder *c) {
+	// next_deblock_addr is written without the lock by worker threads (the
+	// deblock frontier and the INT_MAX completion flag), so read every entry
+	// atomically here rather than with a wide vector load: a non-atomic vector
+	// read racing the workers' atomic stores is undefined behaviour and, on a
+	// weakly-ordered target, could observe a torn or stale completion flag.
+	// Slots past frame_slots never held a picture, so none of them is wanted.
+	FrameMask ready = 0;
+	for (int i = 0, n = scanned_slots(c); i < n; i++) {
+		ready |= (FrameMask)(__atomic_load_n(&c->next_deblock_addr[i], __ATOMIC_ACQUIRE) == INT_MAX) << i;
+		if (c->interlaced) // the bottom fields, see FIELD_ID
+			ready |= (FrameMask)(__atomic_load_n(&c->next_deblock_addr[i + FIELD_ID], __ATOMIC_ACQUIRE) == INT_MAX) << (i + FIELD_ID);
+	}
+	return ready;
+}
+// Frames targeted by a busy (pending or running) task, i.e. that will make
+// progress. In multithreaded mode a task may start as soon as each of its
+// references is complete or has such a writer, and then waits for the rows it
+// needs in wait_frame_progress, which lets consecutive dependent frames overlap.
+static always_inline FrameMask writing_frames(Edge264MvcDecoder *dec) {
+	FrameMask writing = 0;
+	int i;
+	TM_FOREACH(i, dec->busy_tasks)
+		writing |= (FrameMask)1 << dec->taskPics[i];
+	return writing;
+}
+// Most pictures with tasks in flight: max_pics at 1080p and below, and fewer
+// for larger pictures, down to min_pics, so that their bytes stay about the same.
+static always_inline int pics_in_flight(Edge264MvcDecoder *dec) {
+	int mbs = dec->sps.pic_width_in_mbs * dec->sps.pic_height_in_mbs;
+	int pics = mbs > 0 ? (int)((int64_t)dec->max_pics * 8160 / mbs) : dec->max_pics;
+	return min(max(pics, dec->min_pics), dec->max_pics);
+}
+static always_inline int oldest_task(Edge264MvcDecoder *dec, TaskMask tasks) {
+	int task_id = tm_pop(&tasks), i;
+	if (task_id < 0)
+		return 0;
+	TM_FOREACH(i, tasks) {
+		if ((int32_t)(dec->task_seq[i] - dec->task_seq[task_id]) < 0)
+			task_id = i;
+	}
+	return task_id;
+}
+static always_inline FrameMask usable_frames(Edge264MvcDecoder *c) {
+	return ready_frames(c) | (c->n_threads ? writing_frames(c) : 0);
+}
+#define BOUND_UNKNOWN (INT_MAX - 1) // mb_bound of a slice before the next NAL tells it
+static always_inline TaskMask held_tasks(Edge264MvcDecoder *c) {
+	return c->held_task >= 0 ? tm_bit(c->held_task) : tm_none();
+}
+// acked_tasks is read and written atomically per 64-bit word, each bit pairing
+// a seq_cst store with a seq_cst load as a single word did.
+static always_inline void acked_set(Edge264MvcDecoder *dec, int task_id) {
+	__atomic_fetch_or(&dec->acked_tasks[task_id >> 6], (uint64_t)1 << (task_id & 63), __ATOMIC_SEQ_CST);
+}
+static always_inline void acked_clear(Edge264MvcDecoder *dec, int task_id) {
+	__atomic_fetch_and(&dec->acked_tasks[task_id >> 6], ~((uint64_t)1 << (task_id & 63)), __ATOMIC_SEQ_CST);
+}
+static always_inline TaskMask acked_load(Edge264MvcDecoder *dec) {
+	TaskMask acked;
+	for (int i = 0; i < TASK_WORDS; i++)
+		acked.w[i] = __atomic_load_n(&dec->acked_tasks[i], __ATOMIC_SEQ_CST);
+	return acked;
+}
+// The handle of an output frame (return_arg) names the slots of its views, as
+// slot + 1 in the low byte for the base view and the next byte for the
+// dependent view (0 when absent), so it is never NULL and holds any slot even
+// in a 32-bit pointer.
+static always_inline void *handle_of(int pic0, int pic1) {
+	return (void *)(uintptr_t)((pic0 + 1) | (pic1 + 1) << 8);
+}
+static always_inline int handle_pic(const void *handle, int view) {
+	return ((uintptr_t)handle >> (view * 8) & 255) - 1;
+}
+static always_inline FrameMask handle_frames(const void *handle) {
+	FrameMask frames = 0;
+	for (int view = 0; view < 2; view++) {
+		int pic = handle_pic(handle, view);
+		if (pic >= 0)
+			frames |= (FrameMask)1 << pic;
+	}
+	return frames;
+}
+// Number of pictures in the output queue of a view, which stay packed at its front.
+static always_inline int queue_len(const Edge264MvcDecoder *dec, int view) {
+	int n = 0;
+	while (n < QUEUE_SIZE && dec->get_frame_queue[view][n] >= 0)
+		n++;
+	return n;
+}
+// Shifts a picture in at the front of the output queue of a view, dropping the last entry.
+static always_inline void queue_push(Edge264MvcDecoder *dec, int view, int pic) {
+	memmove(dec->get_frame_queue[view] + 1, dec->get_frame_queue[view], QUEUE_SIZE - 1);
+	dec->get_frame_queue[view][0] = pic;
+}
+// Single-threaded, the newest slice task is held until the next NAL bounds it.
+// Multithreaded, it starts at once and learns its bound as it goes (see
+// known_mb_bound and claim_after_older_slices).
+static always_inline TaskMask ready_tasks(Edge264MvcDecoder *c) {
+	FrameMask not_ready = ~usable_frames(c);
+	TaskMask ready = c->n_threads ? c->pending_tasks : tm_andnot(c->pending_tasks, held_tasks(c));
+	int i;
+	TM_FOREACH(i, ready) {
+		if ((c->task_dependencies[i] & not_ready) || tm_any(tm_and(c->task_after[i], c->busy_tasks)))
+			tm_clear(&ready, i);
+	}
+	return ready;
+}
+static always_inline FrameMask depended_frames(Edge264MvcDecoder *dec) {
+	FrameMask depended = 0; // the dependencies of idle tasks are cleared
+	int i;
+	TM_FOREACH(i, dec->busy_tasks)
+		depended |= dec->task_dependencies[i];
+	return depended;
+}
+// Frames still being written by an in-flight decode task: the target picture
+// (taskPics) of every busy task whose frame has not completed. These slots must
+// never be reallocated - the new occupant would share mb_buffer/remaining_mbs
+// with the previous picture's still-running tasks, whose atomic subtractions
+// then corrupt the counter so the frame never finalizes and the task pool
+// deadlocks. depended_frames only covers frames a task READS (its RefPicList),
+// not the one it writes, so it does not protect against this. Completed frames
+// (next_deblock_addr == INT_MAX) are excluded: a worker's completion store is
+// its last write to the frame, so the window between it and the busy-bit clear
+// (taken under the lock after the benchmark log) is benign and excluding it
+// avoids stalling the parser on every frame completion.
+static always_inline FrameMask inflight_frames(Edge264MvcDecoder *dec) {
+	return writing_frames(dec) & ~ready_frames(dec);
+}
+// Wake the tasks waiting on the progress of frame pic (lock held).
+static always_inline void wake_frame_waiters(Edge264MvcDecoder *dec, int pic) {
+	if (dec->progress_wake_addr[pic] != INT_MAX) {
+		__atomic_store_n(&dec->progress_wake_addr[pic], INT_MAX, __ATOMIC_RELAXED);
+		pthread_cond_broadcast(&dec->frame_progress[pic]);
+	}
+}
+// Advance the deblocking frontier of frame pic (lock not held), waking the
+// tasks waiting on it only once it reaches the lowest address they asked for,
+// so the frames being decoded do not wake every waiter at each row.
+static always_inline void publish_frame_progress(Edge264MvcDecoder *dec, int pic, int32_t addr) {
+	__atomic_store_n(&dec->next_deblock_addr[pic], addr, __ATOMIC_SEQ_CST);
+	if (dec->n_threads && addr >= __atomic_load_n(&dec->progress_wake_addr[pic], __ATOMIC_SEQ_CST)) {
+		pthread_mutex_lock(&dec->lock);
+		wake_frame_waiters(dec, pic);
+		pthread_mutex_unlock(&dec->lock);
+	}
+}
+// Sleep until frame pic may have reached addr (lock held). The caller loops
+// on its condition, since waiters are also woken when a frame loses its last
+// writer or gets concealed. A seq_cst store of the wake address before the
+// caller's next check pairs with the seq_cst store-then-load in
+// publish_frame_progress, so either the waiter sees the new frontier or the
+// publisher sees the waiter.
+static always_inline void wait_frame_locked(Edge264MvcDecoder *dec, int pic, int32_t addr) {
+	if (addr < dec->progress_wake_addr[pic])
+		__atomic_store_n(&dec->progress_wake_addr[pic], addr, __ATOMIC_SEQ_CST);
+	if (__atomic_load_n(&dec->next_deblock_addr[pic], __ATOMIC_SEQ_CST) < addr)
+		pthread_cond_wait(&dec->frame_progress[pic], &dec->lock);
+}
+// relative time with microsecond precision
+static always_inline uint64_t get_relative_time_us() {
+	#ifdef _WIN32
+		LARGE_INTEGER ticks, frequency;
+		QueryPerformanceFrequency(&frequency);
+		QueryPerformanceCounter(&ticks);
+		return (uint64_t)ticks.QuadPart * 1000000 / (uint64_t)frequency.QuadPart; // could be optimized with mul+shift but not critical
+	#else
+		struct timespec tp;
+		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tp);
+		return (uint64_t)tp.tv_sec * 1000000 + tp.tv_nsec / 1000;
+	#endif
+}
+
+
+
+/**
+ * Logging functions
+ */
+static const char *ret_to_str(int ret) {
+	static const char *retnames[] = {"0", "ENOBUFS", "ENOTSUP", "EBADMSG", "EINVAL", "ENODATA", "ENOMEM", "ENOMSG", "Unknown"};
+	i8x16 retcodes = {0, ENOBUFS, ENOTSUP, EBADMSG, EINVAL, ENODATA, ENOMEM, ENOMSG};
+	return retnames[__builtin_ctz(movemask(set8(ret) == retcodes) | 1 << 8)];
+}
+#ifdef LOGS
+	// The trace of a NAL is built in log_buf, then handed to log_cb with the
+	// result line by print_dec. A trace too long for log_buf (a crafted header
+	// can log far more than any real one) is cut at the end of its last line that
+	// leaves room for the result line, and marked as truncated. Tracing never
+	// changes the result of a NAL.
+	static const char log_truncated_line[] = "  # trace truncated\n";
+	static noinline void cut_dec_log(Edge264MvcDecoder *dec, int room) {
+		int pos = min(dec->log_pos, (int)sizeof(dec->log_buf) - 1);
+		while (pos > 0 && (dec->log_buf[pos - 1] != '\n' || pos + room > (int)sizeof(dec->log_buf)))
+			pos--;
+		dec->log_pos = pos;
+		dec->log_truncated = 1;
+	}
+	#define log_dec(dec, ...) {\
+		if (!dec->log_truncated) {\
+			int _room = sizeof(dec->log_buf) - dec->log_pos;\
+			int _len = snprintf(dec->log_buf + dec->log_pos, _room, __VA_ARGS__);\
+			if (_len < _room) {\
+				dec->log_pos += _len;\
+			} else {\
+				dec->log_pos = sizeof(dec->log_buf);\
+				cut_dec_log(dec, 0);\
+			}\
+		}}
+	static noinline int print_dec(Edge264MvcDecoder *dec, const char *suffix, int ret) {
+		int room = snprintf(NULL, 0, suffix, ret_to_str(ret)) + 1;
+		if (dec->log_truncated || dec->log_pos + room > (int)sizeof(dec->log_buf))
+			cut_dec_log(dec, room + (int)sizeof(log_truncated_line) - 1);
+		char *end = dec->log_buf + dec->log_pos;
+		if (dec->log_truncated) {
+			memcpy(end, log_truncated_line, sizeof(log_truncated_line) - 1);
+			end += sizeof(log_truncated_line) - 1;
+		}
+		snprintf(end, room, suffix, ret_to_str(ret));
+		dec->log_pos = 0;
+		dec->log_truncated = 0;
+		dec->log_cb(dec->log_buf, dec->log_arg);
+		return ret;
+	}
+	#define log_mb(ctx, ...) {\
+		if (ctx->log_pos < sizeof(ctx->log_buf))\
+			ctx->log_pos += snprintf(ctx->log_buf + ctx->log_pos, sizeof(ctx->log_buf) - ctx->log_pos, __VA_ARGS__);}
+	static inline int print_mb(Edge264MvcContext *ctx) {
+		int pos = ctx->log_pos;
+		ctx->log_pos = 0;
+		if (pos >= sizeof(ctx->log_buf))
+			return ENOTSUP;
+		ctx->log_cb(ctx->log_buf, ctx->log_arg);
+		return 0;
+	}
+#else
+	#define log_dec(...)
+	#define print_dec(dec, suffix, ret) (ret)
+	#define log_mb(...)
+	#define print_mb(ctx) (0)
+#endif
+static always_inline const char *unsup_if(int cond) { return cond ? " # unsupported" : ""; }
+#define print_i8x16(a) {\
+	i8x16 _v = a;\
+	printf(#a ":");\
+	for (int _i = 0; _i < 16; _i++)\
+		printf(" %d", _v[_i]);\
+	putchar('\n');}
+#define print_u8x16(a) {\
+	u8x16 _v = a;\
+	printf(#a ":");\
+	for (int _i = 0; _i < 16; _i++)\
+		printf(" %3d", _v[_i]);\
+	putchar('\n');}
+#define print_i16x8(a) {\
+	i16x8 _v = a;\
+	printf(#a ":");\
+	for (int _i = 0; _i < 8; _i++)\
+		printf(" %6d", _v[_i]);\
+	putchar('\n');}
+#define print_i32x4(a) {\
+	i32x4 _v = a;\
+	printf(#a ":");\
+	for (int _i = 0; _i < 4; _i++)\
+		printf(" %6d", _v[_i]);\
+	putchar('\n');}
+
+
+
+/**
+ * Function declarations used across files are put in a single block here
+ * instead of .h files because they are so few.
+ */
+// edge264mvc_bitstream.c
+static inline size_t get_bytes(Edge264MvcGetBits *gb, int nbytes);
+static noinline int refill(Edge264MvcGetBits *gb, int ret);
+static noinline int get_u1(Edge264MvcGetBits *gb);
+static noinline unsigned get_uv(Edge264MvcGetBits *gb, int v);
+static noinline unsigned get_ue16(Edge264MvcGetBits *gb, unsigned upper);
+static noinline int get_se16(Edge264MvcGetBits *gb, int lower, int upper);
+#if SIZE_BIT == 32
+	static noinline unsigned get_ue32(Edge264MvcGetBits *gb, unsigned upper);
+	static noinline int get_se32(Edge264MvcGetBits *gb, int lower, int upper);
+#else
+	#define get_ue32 get_ue16
+	#define get_se32 get_se16
+#endif
+static noinline int renorm_bits(Edge264MvcContext * restrict ctx, int bits);
+static int renorm_fixed(Edge264MvcContext * restrict ctx, int ret);
+static inline int get_ae_inline(Edge264MvcContext * restrict ctx, int ctxIdx);
+static noinline int get_ae(Edge264MvcContext * restrict ctx, int ctxIdx);
+static inline int get_bypass(Edge264MvcContext *ctx);
+static int cabac_start(Edge264MvcContext *ctx);
+static int cabac_terminate(Edge264MvcContext *ctx);
+static void cabac_init(Edge264MvcContext *ctx);
+
+// edge264mvc_deblock.c
+static noinline void deblock_mb(Edge264MvcContext *ctx);
+
+// edge264mvc_inter.c
+static void noinline decode_inter(Edge264MvcContext *ctx, int i, int w, int h);
+
+// edge264mvc_intra.c
+static cold noinline void decode_intra4x4(uint8_t * restrict p, size_t stride, int mode, i16x8 clip);
+static cold noinline void decode_intra8x8(uint8_t * restrict p, size_t stride, int mode, i16x8 clip);
+static cold noinline void decode_intra16x16(uint8_t * restrict p, size_t stride, int mode, i16x8 clip);
+static cold noinline void decode_intraChroma(uint8_t * restrict p, size_t stride, int mode, i16x8 clip);
+static cold noinline void decode_intraChroma422(uint8_t * restrict p, size_t stride, int mode, i16x8 clip);
+
+// edge264mvc_mvpred.c
+static inline void decode_inter_16x16(Edge264MvcContext *ctx, i16x8 mvd, int lx);
+static inline void decode_inter_8x16_left(Edge264MvcContext *ctx, i16x8 mvd, int lx);
+static inline void decode_inter_8x16_right(Edge264MvcContext *ctx, i16x8 mvd, int lx);
+static inline void decode_inter_16x8_top(Edge264MvcContext *ctx, i16x8 mvd, int lx);
+static inline void decode_inter_16x8_bottom(Edge264MvcContext *ctx, i16x8 mvd, int lx);
+static noinline void decode_direct_mv_pred(Edge264MvcContext *ctx, unsigned direct_mask);
+
+// edge264mvc_residual.c
+static noinline void add_idct4x4(Edge264MvcContext *ctx, int iYCbCr, int DCidx, uint8_t *p);
+static void add_dc4x4(Edge264MvcContext *ctx, int iYCbCr, int DCidx, uint8_t *p);
+static void add_idct8x8(Edge264MvcContext *ctx, int iYCbCr, uint8_t *p);
+static void transform_dc4x4(Edge264MvcContext *ctx, int iYCbCr);
+static void transform_dc2x2(Edge264MvcContext *ctx);
+
+// edge264mvc_slice.c
+static noinline void parse_slice_data_cavlc(Edge264MvcContext *ctx);
+static noinline void parse_slice_data_cabac(Edge264MvcContext *ctx);
+
+// edge264mvc_headers.c
+#ifndef ADD_VARIANT
+	#define ADD_VARIANT(f) f
+#endif
+void *worker_loop(void *d);
+void *worker_loop_v2(void *d);
+void *worker_loop_v3(void *d);
+void *worker_loop_v4(void *d);
+void *worker_loop_log(void *d);
+int ignore_NAL_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int unsup_NAL_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int corrupt_NAL_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_slice_layer_without_partitioning(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_slice_layer_without_partitioning_v2(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_slice_layer_without_partitioning_v3(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_slice_layer_without_partitioning_v4(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_slice_layer_without_partitioning_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_access_unit_delimiter_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_sei_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_nal_unit_header_extension(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_nal_unit_header_extension_v2(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_nal_unit_header_extension_v3(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_nal_unit_header_extension_v4(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_nal_unit_header_extension_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_pic_parameter_set(Edge264MvcDecoder *dec,  Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_pic_parameter_set_v2(Edge264MvcDecoder *dec,  Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_pic_parameter_set_v3(Edge264MvcDecoder *dec,  Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_pic_parameter_set_v4(Edge264MvcDecoder *dec,  Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_pic_parameter_set_log(Edge264MvcDecoder *dec,  Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_seq_parameter_set(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_seq_parameter_set_v2(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_seq_parameter_set_v3(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_seq_parameter_set_v4(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_seq_parameter_set_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_end_of_sequence(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_end_of_sequence_v2(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_end_of_sequence_v3(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_end_of_sequence_v4(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+int parse_end_of_sequence_log(Edge264MvcDecoder *dec, Edge264MvcUnrefCb unref_cb, void *unref_arg);
+
+#endif

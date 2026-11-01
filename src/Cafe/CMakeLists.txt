@@ -652,7 +652,7 @@ target_link_libraries(CemuCafe PRIVATE
   pugixml::pugixml
   ZLIB::ZLIB
   CURL::libcurl
-  ih264d
+  edge264mvc::edge264mvc
   zstd::zstd
   ${glslang_target}
   PUBLIC

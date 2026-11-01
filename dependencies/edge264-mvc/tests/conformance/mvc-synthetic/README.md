@@ -1,0 +1,178 @@
+# Synthetic MVC structural fixtures
+
+Hand-authored minimal MVC bitstreams that pin edge264-mvc's handling of MVC
+NAL-ordering edge cases the published ITU conformance vectors do not cover.
+Run by `make check` through the same harness as the rest of the conformance
+suite (`tests/conformance_check.c`), single-threaded and multithreaded.
+
+Unlike `../mvc/` (official JVT vectors), these are **not** ITU material: each
+is generated from its committed `.yaml` source with `tests/gen_avc.py`. The ITU
+MVC area ships no reference YUV and FFmpeg cannot decode the dependent view, so
+there is no external file to anchor against - but the expected output is still
+**derived independently of the decoder**, not taken on trust (see *Ground truth*
+below). On top of the per-view hash and exact frame count, the harness asserts
+on every run that each stereo pair is POC-paired (`Poc == Poc_mvc`) and that
+frames come out in non-decreasing `DisplayPoc` order.
+
+All streams are 1x1-macroblock, Stereo High (profile 128), CAVLC, two views.
+
+## Ground truth
+
+These fixtures do not bless "whatever the decoder emits". Every macroblock is
+residual-free: the IDR macroblocks are I_NxN with all neighbours unavailable, so
+H.264 8.3 infers DC intra prediction = `1 << (BitDepth-1)` = 128, and the later
+macroblocks are zero-motion, no-residual P/B copies of those references. So the
+correct decoded output is **every sample = 128**, for both views, in every
+frame, by spec - knowable before running anything.
+
+[`ground_truth.py`](ground_truth.py) recomputes the committed hashes from that
+derivation alone (the same FNV-1a-128 the harness uses, over a `0x80` byte
+stream of the right length) and checks them against `../manifest.txt`, with no
+decoder involved. So the chain is closed end to end: `ground_truth.py` proves
+the committed hash is the spec-correct output, and `make check` proves the
+decoder reproduces that hash. Run it from the repo root:
+
+    python3 tests/conformance/mvc-synthetic/ground_truth.py
+
+## Fixtures
+
+- **mvc_base** (2 frames) - one anchor IDR + one non-anchor access unit, in
+  spec NAL order (base view before dependent view). The in-order reference for
+  the reordering-invariance check below.
+
+- **mvc_dep_before_base** (2 frames) - the same content as `mvc_base`, but in
+  the IDR access unit the dependent view (NAL type 20) is placed *before* its
+  base view (NAL type 5). Reordering NAL units within an access unit cannot
+  change the decoded output, so a correct decoder must produce a stream
+  byte-identical to `mvc_base` - the two carry the **same** committed hash, and
+  `ground_truth.py` asserts that equality as an invariance, not a coincidence.
+  This is *structural coverage*, not a fork differential: upstream edge264
+  handles it identically (verified). It pins NAL-order-robust view association.
+
+- **mvc_late_dependent** (4 frames) - the first two access units are base-only
+  (no NAL type 20); the dependent view appears only from the third. A correct
+  decoder emits the early frames as 2D (base alone) and the later ones as
+  POC-paired stereo, in `DisplayPoc` order, without stalling on the 2D->stereo
+  transition. This is a genuine **fork regression guard**: upstream edge264
+  (5b8ba48) stalls after 2 frames on this transition (no forward progress),
+  whereas the fork delivers all 4. It pins the fork's forward-progress /
+  stereo-pairing fix for a changing view layout.
+
+- **mvc_dependent_frame_num_gap** (12 frames) - a genuine **fork regression
+  guard** for access-unit view pairing. Every non-anchor dependent view is
+  non-reference, so the dependent view's `PrevRefFrameNum` never advances; the
+  last access unit's reference dependent then carries a large `frame_num` gap,
+  and the decoder infers gap-fill frames between the base and its dependent
+  (8.2.5.2), so the dependent's FrameId lands several past `base + 1`. The two
+  views still share a `FrameNum` and a POC. The last AU also has the lowest
+  non-zero POC, so a *paced* consumer (drain only when the DPB reports full)
+  force-bumps it while its dependent is not yet queued - exactly where the old
+  decode-order "`base + 1`" pairing shortcut misresolved the pair. Pairing by
+  (`FrameNum`, POC) fixes it; without the fix the held, mispaired frames overflow
+  the DPB and the decoder aborts. This fixture is flagged paced in the manifest
+  (trailing `1`) and the harness runs paced fixtures in a forked child, so that
+  abort is reported as a clean FAIL rather than dumping core. Unlike the JVT MVC
+  vectors and the other fixtures here, the bug needs DPB pressure, which no
+  published vector and no aggressive-drain test reproduces. Profile 128, level
+  3.0, `gaps_in_frame_num_value_allowed_flag = 1`.
+
+- **mvc_same_poc_pairing** (320 frames) - a **fork regression guard** for the
+  *primary* dependent-view pairing scan in `get_frame`. Structurally derived
+  from a real 3D-Blu-ray menu clip - **headers only, all-128, no picture data**: many
+  short IDR sequences with a 4-bit POC lsb (`log2_max_pic_order_cnt_lsb = 4`) make
+  frames of different sequences share a full POC while carrying different `frame_num`,
+  so `get_frame_queue[1]` holds two same-POC dependent views at once. A small
+  `max_dec_frame_buffering = 4` force-bumps a base under a *paced* consumer while its
+  same-POC dependent is still queued; the pre-fix scan matched on POC **alone** and
+  paired the base with the wrong same-POC dependent, stranding frames until the DPB
+  overflows and the decoder aborts. Matching on (`FrameNum`, POC) - as the hold/bump
+  scans already do - fixes it. Under multithreading the same mispair swaps two frames'
+  dependent halves non-deterministically; the paced DPB overflow is the deterministic,
+  all-128-detectable manifestation guarded here. Flagged paced in the manifest.
+  Profile 128, level 4.1, `max_num_reorder_frames = 1`, `max_dec_frame_buffering = 4`.
+  It doubly guards the exported **display-order key**: the same short-sequence
+  4-bit-POC-lsb layout makes two successive output pictures share a raw POC, so the
+  pre-fix `edge264mvc_unwrap_output_poc` (which advanced its running base only on a
+  strict POC *decrease*) emitted an equal DisplayPoc - a plateau the harness now
+  rejects for stereo (strict `<=` in `account_frame`), pinning the
+  strictly-monotonic-DisplayPoc fix on a real-3D-Blu-ray-derived layout.
+  Its `.yaml` is produced by `tests/gen_same_poc_stream.py` (the embedded per-frame
+  header structure is technical decode metadata, not picture content).
+
+- **mvc_interview_reflist** (2 frames) - a **correctness guard**, and the only
+  fixture here that is not all-128: the base view is 128 and the dependent IDR is
+  192 (an `I_PCM` macroblock). The second dependent access unit is a
+  `B_L1_16x16`, zero-motion, no-residual copy of `RefPicList1[0]`, and the slice
+  has exactly one temporal reference, so `RefPicList0 == RefPicList1 = [depIDR]`
+  after temporal init. Per H.8.2.1 the inter-view reference is appended *after*
+  the 8.2.4.2.3 "RefPicList1 identical to RefPicList0 -> switch the first two"
+  step; on a single-entry list that switch does not fire, so `RefPicList1[0]`
+  stays the temporal reference and the dependent frame decodes to 192. A decoder
+  that appends the inter-view reference *before* the switch makes the list length
+  2, fires the switch, and wrongly promotes the co-AU base view (128) to
+  `RefPicList1[0]` - so the dependent frame decodes to 128, the wrong eye. The
+  spec-correct dependent output (192, 192) is pinned in `ground_truth.py`. This is
+  inert on every real 3D-Blu-ray and the whole JVT MVC set (all use hierarchical B
+  with two temporal references, where the switch does not fire); the single-ref
+  shape is what exposes it. Its `.yaml` is produced by
+  `tests/gen_interview_reflist_stream.py`.
+
+- **mvc_mmco5_pairing** (3 frames) - **path coverage** for MMCO5
+  (`memory_management_control_operation == 5`, the reference-marking reset) in the MVC
+  path. The third access unit issues an MMCO5 in *both* views; the fixture confirms the
+  decoder handles a mid-stream marking reset in a stereo stream without stalling and
+  keeps the two views POC-paired (`Poc == Poc_mvc`) and in display order across it - no
+  published JVT MVC vector and no other synthetic fixture drives MMCO5 in the MVC path.
+  All-128 (residual-free DC/zero-MV), so it exercises the per-view MMCO5 branch of
+  `parse_dec_ref_pic_marking` (the `LongTermFrameIdx` reset that must stay view-scoped)
+  but does **not** distinguish that view-scoping by pixels: the cross-view
+  `LongTermFrameIdx` clobber is only observable with base-view long-term references
+  (MMCO 3/6), which this fixture deliberately omits. It is committed regression coverage
+  for the MMCO5 x MVC interaction, not a fail-first guard for the view-mask fix itself.
+
+- **mvc_display_ordering** (8 frames) - a **fork regression guard** for the base-view
+  display-order fix from issue #2. Two IDR sequences code the base view with decode order
+  != display order (POCs decoded 0, 2, 6, 4, `max_num_reorder_frames = 1`), so a
+  higher-POC picture is decoded and its dependent queued before a lower-POC one. The
+  removed `catch_up_orphaned_bases` reverse-pairing pass stamped such a base's display
+  rank at queue time, in decode rather than display order, swapping output positions 3
+  and 4; output is now strictly base-driven (`bump_frame` never queues a dependent ahead
+  of its base) and emits 0, 2, 4, 6. Unlike the other synthetic fixtures this one is
+  **not** all-128: each picture carries a distinct flat I_PCM luma (per POC), so the
+  reorder is visible in the base-view hash - the pre-fix (`catch_up_orphaned_bases`)
+  decoder fails it on the base hash, and it matches FFmpeg's base-view order.
+  `mvc_display_ordering.yaml` is produced by `tests/gen_mvc_ordering.py`.
+
+- **mvc_idr_leading** (8 frames) - a **fork regression guard** for the output order at an
+  IDR picture followed by pictures displayed before it, as GOPs of Blu-ray and camcorder
+  video have them: the second IDR picture (POC 4) is followed by two pictures with POCs 0
+  and 2, while the dependent view of the picture before it still waits for output, with
+  `max_num_reorder_frames = 1`. Counting that dependent view against the reorder limit of
+  the base view bumped the IDR picture as soon as it was parsed, so it came out before the
+  two pictures displayed ahead of it; the reorder limit now counts the pictures of one
+  view. Like `mvc_display_ordering` each picture carries a flat I_PCM luma per POC, so
+  the order shows in both hashes, which fail on the unfixed decoder, and the base view
+  order matches FFmpeg's. `mvc_idr_leading.yaml` is produced by
+  `tests/gen_mvc_ordering.py` with the argument `idr-leading`.
+
+## Regenerating
+
+After an intentional, reviewed change to decoded output:
+
+    make                                                  # builds conformance_check + gen_avc deps
+    python3 tests/gen_avc.py tests/conformance/mvc-synthetic/<name>.yaml \
+            tests/conformance/mvc-synthetic/<name>.264
+    ./conformance_check emit tests/conformance/mvc-synthetic <name>
+
+Keep the printed line only if its comment reads `pair_err=0 order_err=0`, then
+copy it (without the trailing `# ...`) into `../manifest.txt`.
+
+`mvc_dependent_frame_num_gap.yaml` is itself produced by a generator (the others
+are hand-written); regenerate it before the `gen_avc.py` step with:
+
+    python3 tests/gen_gap_stream.py 12 10 0 \
+            tests/conformance/mvc-synthetic/mvc_dependent_frame_num_gap.yaml
+
+It is a *paced* fixture, so append a trailing ` 1` to its manifest line by hand
+(`emit` prints only the five base fields) and keep its `(frames, frames)` entry
+in `ground_truth.py` in sync.

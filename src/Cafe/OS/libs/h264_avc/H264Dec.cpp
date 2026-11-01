@@ -39,7 +39,6 @@ namespace H264
 		struct
 		{
 			MEMPTR<void> outputFunc{ nullptr };
-			uint8be outputPerFrame{ 0 }; // default is 0
 			MEMPTR<void> userMemoryParam{ nullptr };
 		}Param;
 		// misc
@@ -48,7 +47,6 @@ namespace H264
 		// decoder state
 		struct
 		{
-			uint32 numFramesInFlight{0};
 			bool isFirstBegin{true};
 			bool isTryingToRecover{false};
 		}decoderState;
@@ -433,17 +431,20 @@ namespace H264
 		}
 		if (ctx->decoderState.isFirstBegin)
 		{
-			session->Init(ctx->Param.outputPerFrame == 0);
+			if (!session->Init())
+			{
+				_ReleaseDecoderSession(session);
+				return 0;
+			}
 			ctx->decoderState.isFirstBegin = false;
 		}
 		else
 			ctx->decoderState.isTryingToRecover = true;
-		//ctx->decoderState.numFramesInFlight = 0;
 		_ReleaseDecoderSession(session);
 		return 0;
 	}
 
-	void H264DoFrameOutputCallback(H264Context* ctx, H264DecoderBackend::DecodeResult& decodeResult);
+	void H264DoFrameOutputCallback(H264Context* ctx, const std::vector<H264DecoderBackend::DecodeResult>& decodeResults);
 
 	H264DEC_STATUS H264DECEnd(void* workMemory)
 	{
@@ -454,23 +455,12 @@ namespace H264
 			cemuLog_log(LogType::Force, "H264DECEnd(): Invalid session");
 			return H264DEC_STATUS::SUCCESS;
 		}
-		coreinit::OSEvent* flushEvt = &session->GetFlushEvent();
-		coreinit::OSResetEvent(flushEvt);
-		session->QueueFlush();
-		coreinit::OSWaitEvent(flushEvt);
-		while(true)
-		{
-			H264DecoderBackend::DecodeResult decodeResult;
-			if( !session->GetFrameOutputIfReady(decodeResult) )
-				break;
-			// todo - output all frames in a single callback?
-			H264DoFrameOutputCallback(ctx, decodeResult);
-			ctx->decoderState.numFramesInFlight--;
-		}
-		cemu_assert_debug(ctx->decoderState.numFramesInFlight == 0); // no frames should be in flight anymore. Exact behavior is not well understood but we may have to output dummy frames if necessary
+		std::vector<H264DecoderBackend::DecodeResult> decodedFrames;
+		const bool flushSucceeded = session->Flush(decodedFrames);
+		H264DoFrameOutputCallback(ctx, decodedFrames);
 		_ReleaseDecoderSession(session);
 		// does not destroy decoder session, keeps it mostly intact so playback can resume after the next H264DECBegin call (potentially at a different location in the stream)
-		return H264DEC_STATUS::SUCCESS;
+		return flushSucceeded ? H264DEC_STATUS::SUCCESS : H264DEC_STATUS::BAD_STREAM;
 	}
 
 	H264DEC_STATUS H264DECSetParam_FPTR_OUTPUT(H264Context* ctx, void* outputFunc)
@@ -481,7 +471,8 @@ namespace H264
 
 	H264DEC_STATUS H264DECSetParam_OUTPUT_PER_FRAME(H264Context* ctx, uint32 outputPerFrame)
 	{
-		ctx->Param.outputPerFrame = outputPerFrame != 0 ? 1 : 0;
+		(void)ctx;
+		(void)outputPerFrame;
 		return H264DEC_STATUS::SUCCESS;
 	}
 
@@ -508,7 +499,7 @@ namespace H264
 		}
 		else if (paramId == PARAMID_OUTPUT_PER_FRAME)
 		{
-			ctx->Param.outputPerFrame = *(uint8be*)paramValue != 0;
+			// Accept the guest parameter but always decode synchronously.
 		}
 		else if (paramId == PARAMID_UKN)
 		{
@@ -567,42 +558,43 @@ namespace H264
 
 	static_assert(sizeof(H264OutputCBStruct) == 12);
 
-	void H264DoFrameOutputCallback(H264Context* ctx, H264DecoderBackend::DecodeResult& decodeResult)
+	void H264DoFrameOutputCallback(H264Context* ctx, const std::vector<H264DecoderBackend::DecodeResult>& decodeResults)
 	{
-		sint32 outputFrameCount = 1;
-
-		cemu_assert(outputFrameCount < 8);
-
-		StackAllocator<MEMPTR<void>, 8> stack_resultPtrArray;
-		StackAllocator<H264DECFrameOutput, 8> stack_decodedFrameResult;
-
-		for (sint32 i = 0; i < outputFrameCount; i++)
-			stack_resultPtrArray[i] = &stack_decodedFrameResult + i;
-
-		H264DECFrameOutput* frameOutput = &stack_decodedFrameResult + 0;
-		memset(frameOutput, 0x00, sizeof(H264DECFrameOutput));
-		frameOutput->imagePtr = (uint8*)decodeResult.imageOutput;
-		frameOutput->result = 100;
-		frameOutput->timestamp = decodeResult.timestamp;
-		frameOutput->frameWidth = decodeResult.frameWidth;
-		frameOutput->frameHeight = decodeResult.frameHeight;
-		frameOutput->bytesPerRow = decodeResult.bytesPerRow;
-		frameOutput->cropEnable = decodeResult.cropEnable;
-		frameOutput->cropTop = decodeResult.cropTop;
-		frameOutput->cropBottom = decodeResult.cropBottom;
-		frameOutput->cropLeft = decodeResult.cropLeft;
-		frameOutput->cropRight = decodeResult.cropRight;
-
-		StackAllocator<H264OutputCBStruct> stack_fptrOutputData;
-		stack_fptrOutputData->frameCount = outputFrameCount;
-		stack_fptrOutputData->resultArray = (MEMPTR<H264DECFrameOutput>*)stack_resultPtrArray.GetPointer();
-		stack_fptrOutputData->userParam = ctx->Param.userMemoryParam.GetBEValue();
-
-		// FPTR callback
-		if (!ctx->Param.outputFunc.IsNull())
+		for (size_t batchStart = 0; batchStart < decodeResults.size(); batchStart += 8)
 		{
-			cemuLog_log(LogType::H264, "H264: Outputting frame via callback. Timestamp: {} Buffer 0x{:08x} UserParam 0x{:08x}", (double)decodeResult.timestamp, (uint32)frameOutput->imagePtr.GetMPTR(), ctx->Param.userMemoryParam.GetMPTR());
-			PPCCoreCallback(ctx->Param.outputFunc.GetMPTR(), stack_fptrOutputData.GetMPTR());
+			const sint32 outputFrameCount = static_cast<sint32>(std::min<size_t>(8, decodeResults.size() - batchStart));
+			StackAllocator<MEMPTR<void>, 8> stack_resultPtrArray;
+			StackAllocator<H264DECFrameOutput, 8> stack_decodedFrameResult;
+
+			for (sint32 i = 0; i < outputFrameCount; i++)
+			{
+				stack_resultPtrArray[i] = &stack_decodedFrameResult + i;
+				H264DECFrameOutput* frameOutput = &stack_decodedFrameResult + i;
+				const auto& decodeResult = decodeResults[batchStart + i];
+				memset(frameOutput, 0x00, sizeof(H264DECFrameOutput));
+				frameOutput->imagePtr = (uint8*)decodeResult.imageOutput;
+				frameOutput->result = 100;
+				frameOutput->timestamp = decodeResult.timestamp;
+				frameOutput->frameWidth = decodeResult.frameWidth;
+				frameOutput->frameHeight = decodeResult.frameHeight;
+				frameOutput->bytesPerRow = decodeResult.bytesPerRow;
+				frameOutput->cropEnable = decodeResult.cropEnable;
+				frameOutput->cropTop = decodeResult.cropTop;
+				frameOutput->cropBottom = decodeResult.cropBottom;
+				frameOutput->cropLeft = decodeResult.cropLeft;
+				frameOutput->cropRight = decodeResult.cropRight;
+			}
+
+			StackAllocator<H264OutputCBStruct> stack_fptrOutputData;
+			stack_fptrOutputData->frameCount = outputFrameCount;
+			stack_fptrOutputData->resultArray = (MEMPTR<H264DECFrameOutput>*)stack_resultPtrArray.GetPointer();
+			stack_fptrOutputData->userParam = ctx->Param.userMemoryParam.GetBEValue();
+
+			if (!ctx->Param.outputFunc.IsNull())
+			{
+				cemuLog_log(LogType::H264, "H264: Outputting {} frames via callback. UserParam 0x{:08x}", outputFrameCount, ctx->Param.userMemoryParam.GetMPTR());
+				PPCCoreCallback(ctx->Param.outputFunc.GetMPTR(), stack_fptrOutputData.GetMPTR());
+			}
 		}
 	}
 
@@ -654,29 +646,22 @@ namespace H264
 			}
 			else
 			{
+				_ReleaseDecoderSession(session);
 				return 0x400; // error (figure out exact error code. Bit 0x80 indicates presence of frame?)
 			}
 		}
-		// feed data to backend
-		session->QueueForDecode((uint8*)ctx->BitStream.ptr.GetPtr(), ctx->BitStream.length, ctx->BitStream.timestamp, imageOutput);
-		ctx->decoderState.numFramesInFlight++;
-		// H264DECExecute is synchronous and will return a frame after either every call (non-buffered) or after 6 calls (buffered)
-		// normally frame decoding happens only during H264DECExecute, but in order to hide the latency of our CPU decoder we will decode asynchronously in buffered mode
-		uint32 numFramesToBuffer = (ctx->Param.outputPerFrame == 0) ? 5 : 0;
-		if(ctx->decoderState.numFramesInFlight > numFramesToBuffer)
+		std::vector<H264DecoderBackend::DecodeResult> decodedFrames;
+		if (!session->Decode(
+			static_cast<uint8*>(ctx->BitStream.ptr.GetPtr()),
+			ctx->BitStream.length,
+			ctx->BitStream.timestamp,
+			imageOutput,
+			decodedFrames))
 		{
-			ctx->decoderState.numFramesInFlight--;
-			while(true)
-			{
-				coreinit::OSEvent& evt = session->GetFrameOutputEvent();
-				coreinit::OSWaitEvent(&evt);
-				H264DecoderBackend::DecodeResult decodeResult;
-				if( !session->GetFrameOutputIfReady(decodeResult) )
-					continue;
-				H264DoFrameOutputCallback(ctx, decodeResult);
-				break;
-			}
+			_ReleaseDecoderSession(session);
+			return 0x400;
 		}
+		H264DoFrameOutputCallback(ctx, decodedFrames);
 		_ReleaseDecoderSession(session);
 		bt.Stop();
 		double callTime = bt.GetElapsedMilliseconds();

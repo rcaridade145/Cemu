@@ -2042,41 +2042,50 @@ public:
 			lineSizer->Add(new wxStaticText(parent, wxID_ANY, ")"));
 			sizer->Add(lineSizer);
 		}
-		// IH264
+		// edge264-mvc
 		{
 			wxSizer* lineSizer = new wxBoxSizer(wxHORIZONTAL);
-			lineSizer->Add(new wxStaticText(parent, wxID_ANY, "Modified ih264 from Android project ("));
-			lineSizer->Add(new wxHyperlinkCtrl(parent, wxID_ANY, "Source", "https://cemu.info/oss/ih264d.zip", wxDefaultPosition, wxDefaultSize, (wxHL_CONTEXTMENU|wxNO_BORDER|wxHL_ALIGN_LEFT)));
+			lineSizer->Add(new wxStaticText(parent, wxID_ANY, "edge264-mvc ("));
+			lineSizer->Add(new wxHyperlinkCtrl(parent, wxID_ANY, "Source", "https://github.com/jens-duttke/edge264-mvc", wxDefaultPosition, wxDefaultSize, (wxHL_CONTEXTMENU|wxNO_BORDER|wxHL_ALIGN_LEFT)));
 			lineSizer->Add(new wxStaticText(parent, wxID_ANY, " "));
-			wxHyperlinkCtrl* noticeLink = new wxHyperlinkCtrl(parent, wxID_ANY, "NOTICE", "", wxDefaultPosition, wxDefaultSize, (wxHL_CONTEXTMENU|wxNO_BORDER|wxHL_ALIGN_LEFT));
+			wxHyperlinkCtrl* noticeLink = new wxHyperlinkCtrl(parent, wxID_ANY, "License", "", wxDefaultPosition, wxDefaultSize, (wxHL_CONTEXTMENU|wxNO_BORDER|wxHL_ALIGN_LEFT));
 			noticeLink->Bind(wxEVT_LEFT_DOWN, [](wxMouseEvent& event)
 				{
 					fs::path tempPath = fs::temp_directory_path();
-					tempPath.append("NOTICE_IH264.txt");
+					tempPath.append("NOTICE_EDGE264MVC.txt");
 					FileStream* fs = FileStream::createFile2(tempPath);
 					if (!fs)
 						return;
 					fs->writeString(
-						"/******************************************************************************\r\n"
-						" *\r\n"
-						" * Copyright (C) 2015 The Android Open Source Project\r\n"
-						" *\r\n"
-						" * Licensed under the Apache License, Version 2.0 (the \"License\");\r\n"
-						" * you may not use this file except in compliance with the License.\r\n"
-						" * You may obtain a copy of the License at:"
-						" *\r\n"
-						" * http://www.apache.org/licenses/LICENSE-2.0\r\n"
-						" *\r\n"
-						" * Unless required by applicable law or agreed to in writing, software\r\n"
-						" * distributed under the License is distributed on an \"AS IS\" BASIS,\r\n"
-						" * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\r\n"
-						" * See the License for the specific language governing permissions and\r\n"
-						" * limitations under the License.\r\n"
-						" *\r\n"
-						" *****************************************************************************\r\n"
-						" * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore\r\n"
-						"*/\r\n"
-						"/*****************************************************************************/\r\n"
+						"edge264-mvc - H.264 and H.264 MVC software decoder\r\n"
+						"\r\n"
+						"Copyright (c) 2013-2014, Celticom / TVLabs\r\n"
+						"Copyright (c) 2014-2026 Thibault Raffaillac <traf@kth.se>\r\n"
+						"Copyright (c) 2026 Jens Duttke\r\n"
+						"All rights reserved.\r\n"
+						"\r\n"
+						"Redistribution and use in source and binary forms, with or without\r\n"
+						"modification, are permitted provided that the following conditions are met:\r\n"
+						"1. Redistributions of source code must retain the above copyright notice,\r\n"
+						"   this list of conditions and the following disclaimer.\r\n"
+						"2. Redistributions in binary form must reproduce the above copyright notice,\r\n"
+						"   this list of conditions and the following disclaimer in the documentation\r\n"
+						"   and/or other materials provided with the distribution.\r\n"
+						"3. Neither the name of the copyright holder nor the names of its\r\n"
+						"   contributors may be used to endorse or promote products derived from this\r\n"
+						"   software without specific prior written permission.\r\n"
+						"\r\n"
+						"THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"\r\n"
+						"AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE\r\n"
+						"IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE\r\n"
+						"ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS AND CONTRIBUTORS BE\r\n"
+						"LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR\r\n"
+						"CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF\r\n"
+						"SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS\r\n"
+						"INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN\r\n"
+						"CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)\r\n"
+						"ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE\r\n"
+						"POSSIBILITY OF SUCH DAMAGE.\r\n"
 					);
 					delete fs;
 					wxLaunchDefaultBrowser(formatWxString("file:{}", _pathToUtf8(tempPath)));

@@ -252,7 +252,18 @@ if (ENABLE_CUBEB)
 	add_compile_definitions("HAS_CUBEB=1")
 endif()
 
-add_subdirectory("dependencies/ih264d" EXCLUDE_FROM_ALL)
+add_library(edge264mvc STATIC dependencies/edge264-mvc/src/edge264mvc.c)
+target_include_directories(edge264mvc PUBLIC dependencies/edge264-mvc)
+target_link_libraries(edge264mvc PRIVATE Threads::Threads)
+set_target_properties(edge264mvc PROPERTIES
+	C_STANDARD 11
+	C_STANDARD_REQUIRED ON
+	C_EXTENSIONS ON
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+	target_compile_options(edge264mvc PRIVATE -O3 -fwrapv -flax-vector-conversions -Wno-override-init)
+endif()
+add_library(edge264mvc::edge264mvc ALIAS edge264mvc)
 
 if (CMAKE_OSX_ARCHITECTURES)
 	set(CEMU_ARCHITECTURE ${CMAKE_OSX_ARCHITECTURES})

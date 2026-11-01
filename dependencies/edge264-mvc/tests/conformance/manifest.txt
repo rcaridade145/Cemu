@@ -1,0 +1,315 @@
+2d/BA1_FT_C 299 0 dd94b1ecf664945d3016c9872c192268 -
+2d/BA1_Sony_D 17 0 c601b21b95b51e1e3b30745306eedd23 -
+2d/BA2_Sony_F 300 0 33794b59a57e220d0b1426b2647b7a04 -
+2d/BA3_SVA_C 33 0 df7bf729a86e5b2ccdf9d34a72490ced -
+2d/BAMQ1_JVC_C 30 0 8a20414e9e9c0a1c9446808d92975ffd -
+2d/BAMQ2_JVC_C 30 0 7e4a4088c8700f84418d1fe0a5d3aaa1 -
+2d/BASQP1_Sony_C 4 0 c5e91a140c2b76882b5d8e4ee80fdb8d -
+2d/CABA1_SVA_B 17 0 2b5f5f0bf75e0ff2c8f0495ad3c2f5df -
+2d/CABA1_Sony_D 50 0 7c0d63d49caaef463ade88cf484644ff -
+2d/CABA2_SVA_B 17 0 7d3a90a85b804db3a1929b79f4b3c786 -
+2d/CABA2_Sony_E 300 0 3ae6d790558756fe20b76e00af592b4f -
+2d/CABA3_SVA_B 33 0 da75af3ab61cd726cb333bae9e65090f -
+2d/CABA3_Sony_C 300 0 27ce95a3fc0b0de80acc4124d81e847d -
+2d/CABA3_TOSHIBA_E 300 0 9f775e4e746baabd76748b7e31ae3434 -
+2d/CABACI3_Sony_B 300 0 36551dbc5faffe59bfae241f6ef09328 -
+2d/CABAST3_Sony_E 25 0 77ee7b52d48f1accab8dee629a6b1ff9 -
+2d/CABASTBR3_Sony_B 25 0 e27dc07ae713ea9eb32c9f4a56112d4f -
+2d/CACQP3_Sony_D 50 0 4c472d879eaa49276ca810eb7810cb3a -
+2d/CANL1_SVA_B 17 0 75e7fd3ddb00940c4fb9b20ffcea4c05 -
+2d/CANL1_Sony_E 50 0 dadbdc359f0c5c918816c13308f9f980 -
+2d/CANL1_TOSHIBA_G 300 0 373538fadda293e38c09d4977572c6f2 -
+2d/CANL2_Sony_E 300 0 e811b18644ff28eb49bbcbd73d49a4ba -
+2d/CANL3_SVA_B 17 0 f91dc57617a6a56d599edaef3ba50c08 -
+2d/CANL3_Sony_C 300 0 14cce76fcdaf0e0e1a10677a3bf31dc3 -
+2d/CANL4_SVA_B 33 0 4640b8a3bd7ee3daf3694256b3f49f9b -
+2d/CAQP1_Sony_B 50 0 12f3d3804ca88b64850e4755967744a9 -
+2d/CI1_FT_B 291 0 058398aa41a215fde72eaf0d64f8d5d8 -
+2d/CI_MW_D 100 0 834bbfd5d082b4c123a6efbf9dc416e8 -
+2d/CVBS3_Sony_C 300 0 433f9771ebb43104c7e4513fa60ed3f5 -
+2d/CVSE2_Sony_B 278 0 f4ed31987d61522772ca8d63126e5356 -
+2d/CVSE3_Sony_H 278 0 3a051e1a86d74e92f9b012ed1473a6d7 -
+2d/CVSEFDFT3_Sony_E 200 0 acef7aefcdbe668786089699c2bdc802 -
+2d/FM2_SVA_C 17 0 7ace1481817aaea646e434a27c260627 -
+2d/FREXT3_TANDBERG_A 5 0 7283e7b82b40f02285ec00d6f3ea959b -
+2d/FRExt1_Panasonic_D 8 0 e95aba9172fda309d6213f41e9fc9ae4 -
+2d/FRExt3_Panasonic_E 11 0 eb009e9bf5e6faa56a34d24c409ba0e4 -
+2d/FRExt_MMCO4_Sony_B 60 0 2c23b23cc425b99fb7e2ee8805cfe2c6 -
+2d/HCAFR1_HHI_C 10 0 f4c331b294391dab5c38ab42dfc3800a -
+2d/HCAFR2_HHI_A 10 0 93841dded478ef58d2c8878e8b6ed2a9 -
+2d/HCAFR3_HHI_A 10 0 4ac1b8f6ca7758a98abeb1741a1b0140 -
+2d/HCAFR4_HHI_A 10 0 9bbfd277b2bde69767f6ff224763f596 -
+2d/HCBP2_HHI_A 250 0 44aa335fb69c79f2ecff130c9af1dd9b -
+2d/HCHP1_HHI_B 250 0 f8e42bcf5477491dd7dbb0f2087ccf08 -
+2d/HCHP2_HHI_A 250 0 cd14a6f62980efad8bd85d6a3f7e46b4 -
+2d/HCMP1_HHI_A 250 0 6a50ff30d1fbe33dbe2c8446bcc98594 -
+2d/Hi422FR12_SONY_A 5 0 82eb6501af430dc479a72263e1d05385 -
+2d/Hi422FR13_SONY_A 5 0 295af928c63bf8b25276273e31a6d47f -
+# Hi422FR9_SONY_A: High 4:2:2 at 10 bits with P slices, whose FRExt zip ships no reference
+# YUV; anchored to the JM reference decoder.
+2d/Hi422FR9_SONY_A 5 0 3f5093df159956798fb3c75b7bab69c0 -
+# Field pictures (PAFF): fields of I and P slices (CVFI1_SVA_C), fields of the Extended
+# profile with several references (MR8_BT_B), and frames mixed with fields, whose B
+# slices take colocated macroblocks of the other structure (HCAFF1_HHI_B, CABAC, and
+# Sharp_MP_PAFF_1r2, CAVLC). Hi422FREXT16_SONY_A has fields at 10 bits in 4:2:2, and like
+# Hi422FR9_SONY_A no reference YUV in its zip, so it is anchored to the JM reference decoder.
+2d/CVFI1_SVA_C 7 0 c174a9cbac5856267d4f90c27e80469f -
+2d/MR8_BT_B 58 0 9178e33971e8e77100ac99e5118bde50 -
+2d/HCAFF1_HHI_B 10 0 ed8c8cfad3dbb40355f91ba2a0ffbcbe -
+2d/Sharp_MP_PAFF_1r2 15 0 d3304c1c0e6a272899995df8ad8c6fa5 -
+2d/Hi422FREXT16_SONY_A 5 0 1b502b967e578eb272d7e9f6e5e8b65b -
+# MBAFF frames (macroblock-adaptive frame/field coding): I slices in CAVLC (CVMA1_Sony_D),
+# P and B slices with constrained intra prediction (CAMACI3_Sony_C), temporal direct
+# prediction and changing QPs in CABAC and CAVLC (CAMASL3_Sony_B, CVMAQP3_Sony_D), 8x8
+# transforms in CAVLC and CABAC (FREXT02_JVC_C, HCAMFF1_HHI_B), MBAFF frames mixed with
+# field pictures (cama1_vtc_c, FRExt4_Panasonic_B, MR9_BT_B with several references), and
+# 4:2:2 at 10 bits (Hi422FREXT17_SONY_A, whose zip ships no reference YUV, anchored to the
+# JM reference decoder).
+2d/CVMA1_Sony_D 5 0 fb9e6d2afd983d1354e88b23fecd0966 -
+2d/CAMACI3_Sony_C 17 0 fc7285c27b18b9c3b1673ae209c31b9a -
+2d/CAMASL3_Sony_B 17 0 8b4d65dfb01236351e83f30a9e9bc0dc -
+2d/CVMAQP3_Sony_D 17 0 9745a2c7f27c6c205a61a6ae5e8a9b8d -
+2d/FREXT02_JVC_C 16 0 3ade56a789efd34e8837587a4ef355cb -
+2d/HCAMFF1_HHI_B 10 0 8c0af967471d1302a153560a3896312b -
+2d/cama1_vtc_c 4 0 29d5fe1e085c18edad4e0f1fdf31fe0c -
+2d/FRExt4_Panasonic_B 10 0 36c10a1526b4a37dd30a7cdf62f44068 -
+2d/MR9_BT_B 58 0 b0a4540146039121043238b704531160 -
+2d/Hi422FREXT17_SONY_A 5 0 4462c9736b93c7a8a1146c4cccb2923d -
+2d/LS_SVA_D 1700 0 0d1a987df2fe9dbea1ee749ffb688347 -
+2d/MR1_BT_A 62 0 0f1463f6c1eb9a0852d3dad0f0e4f545 -
+2d/MR2_TANDBERG_E 300 0 18c515b01e28363cb3e3d192cccd69b5 -
+2d/MR3_TANDBERG_B 300 0 70105f3b52b2805a2e4cbfdecf93d7a3 -
+2d/MR4_TANDBERG_C 300 0 27e5da587bd404c11d6fb2d78bb0aee0 -
+2d/NL1_Sony_D 17 0 9f340267c94d97bf24d3df857603a13a -
+2d/NL2_Sony_H 300 0 3d40a3d633e66206050106786b03133b -
+2d/NL3_SVA_E 33 0 1ce7be8ab2a8e2db53eaeeb539620c6a -
+2d/NLMQ1_JVC_C 30 0 99fc74913632ca4e7f18d913a65d09ab -
+2d/NLMQ2_JVC_C 30 0 2ad5139017a96f7440545ffcb0dec201 -
+2d/SL1_SVA_B 33 0 014e2c7f26ef39e1f6f8ce1b81d5c140 -
+2d/SVA_BA1_B 17 0 012783c1c529423fc33d5e87ca3c4c36 -
+2d/SVA_BA2_D 17 0 ceb27ac6041be276831e59f3a7307c67 -
+2d/SVA_Base_B 17 0 29d86165d15fc39e68462e3ae9ef4be3 -
+2d/SVA_CL1_E 50 0 891106e36f1c1f1985283c0c53e30948 -
+2d/SVA_FM1_E 17 0 2969a5f26e61d5274ef6b7207e0b7202 -
+2d/SVA_NL1_B 17 0 b72862ef9abd5bb243977767990b2ac3 -
+2d/SVA_NL2_E 17 0 9370528175159734e8ecfcc9e64213f9 -
+2d/brcm_freh3 100 0 dd4a3ce642c5c253ec18e15b72a9f4be -
+2d/brcm_freh8 100 0 2431ea44c57315a63f824143ba569923 -
+2d/brcm_freh9 100 0 950ea83a871e1583f9be0be5636c0ffa -
+2d/cabac_mot_frm0_full 30 0 adb1777dba92ad66ae8cf8befede46d3 -
+2d/cavlc_mot_frm0_full_B 30 0 365c496c1eabefce7a89154f6d9a1357 -
+2d/freh12_b 100 0 1f5369c38c1bf6f6ee2054f0a4ece6c7 -
+2d/freh1_b 100 0 0e992f845ad013e0fd624a0d6ad3af31 -
+2d/freh2_b 100 0 76d61201b1d4f91f1094eeb67c39cea2 -
+# Synthetic 2D robustness fixture (x264 + a level_idc downgrade, not an ITU vector;
+# see 2d-synthetic/README.md). over_level_dpb declares a level too low for its frame
+# size, so the level-derived MaxDpbFrames (2) is smaller than its signaled
+# max_num_ref_frames (4); the base hash is anchored to FFmpeg's decode, which honours
+# the signaled reference count. Without the over-level ref/DPB fix the sliding window
+# retires still-referenced frames and the decoder produces wrong pixels here (and races
+# under multithreading), so this line FAILs on the unfixed decoder.
+2d-synthetic/over_level_dpb 24 0 724c936c63e448f1dcdc17408198af00 -
+# Synthetic scaling-list fall-back fixture (x264 High + a PPS bit-patch, not an ITU
+# vector; see 2d-synthetic/README.md). Its PPS sets pic_scaling_matrix_present_flag=1
+# with every pic_scaling_list_present_flag[i]=0 over a seq_scaling_matrix_present_flag=0
+# SPS, so the spec mandates Fall-Back Rule Set A (the Default_4x4/8x8 matrices); the base
+# hash is anchored to FFmpeg's decode, which applies them. Without the rule-A fix the
+# absent lists inherit the SPS's Flat_16 and every coefficient dequantizes wrong, so this
+# line FAILs on the unfixed decoder.
+2d-synthetic/pps_scaling_fallback 6 0 0874c923cff16d783d1c89544ef286cd -
+# Synthetic per-slice deblocking fixture (x264 intra + a slice header rewrite by
+# tests/gen_slice_deblock_offsets.py, not an ITU vector; see 2d-synthetic/README.md).
+# Each picture has 4 slices, and the odd ones carry their own slice_alpha_c0_offset_div2
+# and slice_beta_offset_div2; the base hash is anchored to FFmpeg's decode. A
+# multithreaded decoder that deblocks a slice decoded concurrently with its predecessor
+# using the parameters of the slice completing the picture produces wrong, run-to-run
+# varying pixels here, so this line FAILs under EDGE264MVC_THREADS on the unfixed decoder.
+2d-synthetic/slice_deblock_offsets 30 0 234eea002d0793d20270826d36c7a6fb -
+# Synthetic MBAFF weighted prediction fixtures (x264 interlaced, not ITU vectors; see
+# 2d-synthetic/README.md), anchored to FFmpeg's decode. No ITU MBAFF vector uses weighted
+# prediction: mbaff_explicit_weights gets explicit weights in its P and B slices from
+# tests/gen_explicit_weights.py, which field macroblocks take for refIdx >> 1 (8.4.2.3);
+# mbaff_implicit_weights has implicit weights, which field macroblocks derive from the
+# fields of their parity (8.4.2.3.1).
+2d-synthetic/mbaff_explicit_weights 30 0 12134c0b276ebe79bb9258eb9403ccc8 -
+2d-synthetic/mbaff_implicit_weights 30 0 94eb1dc78dec470a30bb102e407498e3 -
+# mbaff_monochrome: an MBAFF frame of 4:0:0 video (x264 interlaced, High profile), anchored to
+# FFmpeg's luma with the neutral chroma planes the decoder outputs for monochrome pictures.
+2d-synthetic/mbaff_monochrome 6 0 42b445508373539b0e86a3cea188697a -
+# gap_reference: a libx264 stream with one reference picture removed (generated by
+# tests/gen_gap_reference.py, not an ITU vector; see 2d-synthetic/README.md). The next
+# picture predicts from the frame inferred for the frame_num gap; the base hash is anchored
+# to FFmpeg's decode, which fills that frame with the previous reference picture.
+2d-synthetic/gap_reference 15 0 699261b2678d5f1987b5710ff79a2f9c -
+# overlapping_slices: ten pictures whose second slice starts inside the first one
+# (generated by tests/gen_overlapping_slices.py, not an ITU vector; see 2d-synthetic/README.md).
+# Each slice ends where the next one starts, so the later slice keeps the overlapping
+# macroblocks, single- and multithreaded; a decoder resolving the overlap by whichever
+# slice claims a macroblock first FAILs here.
+2d-synthetic/overlapping_slices 10 0 f4ab3137e5fd9325a06bd77ab75b9ce4 -
+# reversed_slices: slice_deblock_offsets with the slices of every picture sent in reverse
+# order (generated by tests/gen_reversed_slices.py; see 2d-synthetic/README.md). The order
+# of the slices does not change the output (8.7), so the hash is the one of
+# slice_deblock_offsets; a decoder deblocking a slice with the offsets of another, or
+# differently from run to run with worker threads, FAILs here.
+2d-synthetic/reversed_slices 30 0 234eea002d0793d20270826d36c7a6fb -
+# overrun_reference: pictures whose second slice runs past the start of the third one,
+# followed by a picture predicting from them (generated by tests/gen_overrun_reference.py;
+# see 2d-synthetic/README.md). The hash is the single-threaded decode, which
+# tests/slice_overrun_check.c also requires of multithreaded runs fed with pauses.
+2d-synthetic/overrun_reference 256 0 a9ce402715c7a90136959404483a3c48 -
+# overrun_reference_422: the same in 4:2:2, with chroma DC coefficients (gen_overrun_reference.py --422).
+2d-synthetic/overrun_reference_422 256 0 848612ad5e9c6ed9119b722ff6416690 -
+# plane_without_d: Intra_16x16 and chroma Plane prediction signaled where the macroblock
+# above-left belongs to the previous slice (generated by tests/gen_plane_without_d.py;
+# see 2d-synthetic/README.md). The hash is the single-threaded decode, with DC prediction
+# in place of Plane; a decoder reading the unavailable macroblock gives another output,
+# and with worker threads one that varies from run to run.
+2d-synthetic/plane_without_d 3 0 17506621ab419625d5b0d29ef65691e4 -
+# weighted_denom7: explicit weighted bi-prediction at weight denominator 7 with weights
+# and offsets near their limits, and with the inferred weight 128 (generated by
+# tests/gen_weighted_denom7.py; see
+# 2d-synthetic/README.md). The hash is anchored to the JM reference decoder, which FFmpeg
+# matches only with its C code (-cpuflags 0).
+2d-synthetic/weighted_denom7 10 0 ecbb537eb67bf3364a6815bc08f2677b -
+# crop_top_left: I_PCM pictures cropped by 8 samples on every side (generated by
+# tests/gen_crop_top_left.py; see 2d-synthetic/README.md), anchored to FFmpeg's decode.
+2d-synthetic/crop_top_left 3 0 47845c1fcf508425b7f6f906a2335f04 -
+# cavlc8x8_deblock: CAVLC 8x8 transforms next to a slice without deblocking (generated by
+# tests/gen_cavlc8x8_deblock.py; see 2d-synthetic/README.md), anchored to the JM reference
+# decoder, which FFmpeg matches.
+2d-synthetic/cavlc8x8_deblock 4 0 11272612a6f6221554ed8d0a68b56ca4 -
+# intra8x8_hd_slices: one slice per macroblock, each with Intra_8x8 Horizontal_Down in its
+# bottom-right block (generated by tests/gen_intra8x8_hd_slices.py; see
+# 2d-synthetic/README.md), anchored to the JM reference decoder, which FFmpeg matches.
+2d-synthetic/intra8x8_hd_slices 4 0 813464520551232573c218107b1e9ce4 -
+# long_term_overflow: a long-term IDR picture and more short-term references than
+# max_num_ref_frames allows (generated by tests/gen_long_term_overflow.py; see
+# 2d-synthetic/README.md), anchored to FFmpeg, which discards the extra reference the
+# same way. The JM reference decoder rejects the stream.
+2d-synthetic/long_term_overflow 5 0 2782cba7f5cc6b25367c46cc06a152e4 -
+# idr_after_long_term: an IDR picture after reference pictures that are all long-term
+# (generated by tests/gen_idr_after_long_term.py; see 2d-synthetic/README.md), anchored
+# to the JM reference decoder, which FFmpeg matches.
+2d-synthetic/idr_after_long_term 5 0 8e6b95802f112325139a35268d12a8e4 -
+# cavlc_ac_overflow: a damaged CAVLC AC block whose coefficient lies one past its scan
+# (generated by tests/gen_cavlc_ac_overflow.py; see 2d-synthetic/README.md), anchored to
+# FFmpeg. The JM reference decoder keeps the coefficient in place of the block's DC.
+2d-synthetic/cavlc_ac_overflow 1 0 4954fef9ebe9b125dc87bacf3ee46ae4 -
+# conceal_wide_islice: damaged CAVLC I slices 140 macroblocks long, whose concealment
+# keeps the first macroblock as decoded (generated by tests/gen_conceal_wide_islice.py;
+# see 2d-synthetic/README.md). Concealment has no reference decoder; the hash is the
+# output of the generic C backend, which the SSE and NEON builds now match.
+2d-synthetic/conceal_wide_islice 2 0 66ceb436507f9ca5abb7ad0a95cc9064 -
+# implicit_weight_far_poc: implicit weighted bi-prediction of a B picture 32767 and 65534
+# picture order counts from its references (generated by tests/gen_implicit_weight_far_poc.py;
+# see 2d-synthetic/README.md), anchored to the JM reference decoder, which FFmpeg matches.
+2d-synthetic/implicit_weight_far_poc 3 0 0bf1e2b66a4e9a259df4f7f434ee03e4 -
+# sps_fewer_refs: an SPS lowering max_num_ref_frames from 4 to 1 without an IDR picture
+# (generated by tests/gen_sps_fewer_refs.py; see 2d-synthetic/README.md), anchored to
+# the JM reference decoder, which FFmpeg matches.
+2d-synthetic/sps_fewer_refs 6 0 256d67b4708b93252a64b4038e37c4e4 -
+# ref_flip: CABA3_SVA_B with its non-reference slices made reference ones (generated by
+# tests/gen_ref_flip.py; see 2d-synthetic/README.md), a damaged stream with concealed
+# macroblocks that later B pictures use for temporal direct prediction. No reference
+# decoder conceals alike; the hash is the decoder's output, and the trailing 1 holds both
+# consumer models to it.
+2d-synthetic/ref_flip 33 0 17ec9d6ba60f6eb67fc9b355a9d95eaf - 1
+# aux_picture: BA3_SVA_C with an alpha plane added as an auxiliary coded picture (NAL types
+# 13 and 19, generated by tests/gen_aux_picture.py; see 2d-synthetic/README.md), which 7.4.1
+# lets a decoder ignore. Anchored to the JM reference decoder; it must share BA3_SVA_C's hash.
+2d-synthetic/aux_picture 33 0 df7bf729a86e5b2ccdf9d34a72490ced -
+# mono_cabac, mono_cavlc: the first 10 pictures of the ITU vectors HPCAMOLQ_BRCM_B and
+# HPCVMOLQ_BRCM_B (monochrome 4:0:0, High profile, CABAC and CAVLC; cut by
+# tests/gen_stream_prefix.py; see 2d-synthetic/README.md). Anchored to the JM reference
+# decoder, whose output for them is the first 10 frames of the ITU reference.
+2d-synthetic/mono_cabac 10 0 21a3b435aa33ffad43e89ec86e38f4a4 -
+2d-synthetic/mono_cavlc 10 0 22c33b4344cf4e378bba4eda0db77fc6 -
+# mono_after_420: the first 2 pictures of the ITU vector HPCALQ_BRCM_B (4:2:0), an
+# end_of_seq NAL and the first 3 pictures of mono_cabac, in one stream (see
+# 2d-synthetic/README.md). Anchored to the JM reference decoder's output for each part.
+2d-synthetic/mono_after_420 5 0 ae56266e3cf4548cee9e762ec264e171 -
+# sp_slices_a, sp_slices_b: the first 40 pictures of the ITU vectors SP1_BT_A and sp2_bt_b
+# (Extended profile, P and SP slices; cut by tests/gen_stream_prefix.py; see
+# 2d-synthetic/README.md), whose output is the first 40 frames of the ITU reference.
+2d-synthetic/sp_slices_a 40 0 192326be4a905d1f4d44cf4bf3387c52 -
+2d-synthetic/sp_slices_b 40 0 b73a7181a578e8045167ec2659e18bf5 -
+# fmo_maps: the first 10 pictures of the ITU vector FM1_BT_B (Baseline, slice groups with
+# all seven map types; cut by tests/gen_stream_prefix.py; see 2d-synthetic/README.md).
+# Anchored to the JM reference decoder, whose output for it is the first 10 frames of the ITU reference.
+2d-synthetic/fmo_maps 10 0 58e755d7b881b8e7d9202ab4e2d84d76 -
+# hbd_*: 9- and 10-bit streams encoded by x264 and the JM reference encoder from FFmpeg's
+# testsrc2 pattern (see 2d-synthetic/README.md), for the B slices, weighted prediction, PCM,
+# constrained intra prediction and monochrome pictures the 10-bit ITU vectors do not hold.
+# Anchored to the JM reference decoder.
+2d-synthetic/hbd_b_weighted 30 0 9ed75f89fd06842936c1e84b5dfc6f58 -
+2d-synthetic/hbd_422_cavlc 30 0 fe360075009732a3c1228df7847765a6 -
+2d-synthetic/hbd_explicit_bipred 18 0 8232de2a71139e416376361d2fb4ac38 -
+2d-synthetic/hbd_9bit 12 0 fd589fdfd9e7b5613138afe52fa1f134 -
+2d-synthetic/hbd_pcm 1 0 fb22e912b033b7bab38fe07eba74f2bf -
+2d-synthetic/hbd_pcm_422_cavlc 1 0 8feb92bc4ccdf873b266c5a02bdcbf96 -
+2d-synthetic/hbd_cip_422 10 0 567aff6d2aa86c69c5af1751e34e7298 -
+2d-synthetic/hbd_mono 10 0 7f8b5d6e1a6d90649a27d1569d6d2411 -
+# mono_chroma_cbp: two Intra 16x16 macroblocks of a 4:0:0 picture whose mb_type codes
+# chroma blocks (generated by tests/gen_avc.py from mono_chroma_cbp.yaml; see
+# 2d-synthetic/README.md). Anchored to the JM reference decoder, which ignores them.
+2d-synthetic/mono_chroma_cbp 1 0 b50207f3a25ee7df6a4d222559d8a8d6 -
+# unpaired_fields: the ITU vector CVFI1_SVA_C (fields) with a second field, a first field
+# and the last field dropped (generated by tests/gen_unpaired_fields.py; see
+# 2d-synthetic/README.md), whose frames lack a field. Concealment has no reference
+# decoder; the hash is the single-threaded decode, which every threading mode must match.
+2d-synthetic/unpaired_fields 7 0 0fc8e6c56396681f640cbaa4c8b412a2 -
+mvc/MVCDS-4 9 1 4b450245d8756f326571edeb914bb783 3713ff32768c93a46ec0f09f175a4fc1
+mvc/MVCDS-5 9 1 4b450245d8756f326571edeb914bb783 8116a281859da53e2bff6cf2e56655ff
+mvc/MVCDS-6 9 1 4b450245d8756f326571edeb914bb783 359a35ef5600e7c6c94789a2a4d2447b
+mvc/MVCRP_2 250 1 18c2d42f44b5ebbccf6aa8f512486535 193c001ced78d34839932fedce1020fd
+mvc/MVCRP_3 250 1 18c2d42f44b5ebbccf6aa8f512486535 8af87ac4f7f8d7873ee3b272a6c504a2
+mvc/MVCSPS-1 9 1 01d24c8cf48614798c486c9b409631d4 3fea8e4bc1b7c3cc5c76c8c046846fe9
+# MVC streams of 3 and 8 views, of which the base view and the one of view order index 1 are
+# decoded (MVCNV-2 codes its views in the order 0, 2, 1, ..., so that is view 2). Both views
+# are anchored to the JMVC reference decoder (check=OK dep_check=OK).
+mvc/MVCNV-2 9 1 4b450245d8756f326571edeb914bb783 8c4e7625ab84036aab4ae2d8298d12d3
+mvc/MVCNV-3 9 1 4b450245d8756f326571edeb914bb783 bf5b42ba466d5608e9077d5a8beeb681
+mvc/MVCSPS-2 9 1 01d24c8cf48614798c486c9b409631d4 a1dd928035f2b145e25f1f6d244a54b4
+# Synthetic MVC structural fixtures (gen_avc.py, not ITU vectors). Their hashes
+# are anchored to an independently derived ground truth (every decoded sample is
+# 128; see mvc-synthetic/ground_truth.py and README.md), and the harness also
+# asserts pair_err=0 / order_err=0. mvc_base is the in-order reference for the
+# reordering invariance; mvc_dep_before_base must share its hash.
+mvc-synthetic/mvc_base 2 1 db3681d9568edf2599f4c9f5e2cf4ce4 db3681d9568edf2599f4c9f5e2cf4ce4
+mvc-synthetic/mvc_dep_before_base 2 1 db3681d9568edf2599f4c9f5e2cf4ce4 db3681d9568edf2599f4c9f5e2cf4ce4
+mvc-synthetic/mvc_late_dependent 4 1 a048378e15cb9b259ead3cfae1ebfce4 db3681d9568edf2599f4c9f5e2cf4ce4
+# Trailing 1 = paced consumer: also decode draining only when the DPB reports
+# full, which holds frames into the dependent-view frame_num gap; without the
+# (FrameNum, POC) pairing fix the decoder aborts here, run forked so it FAILs cleanly.
+mvc-synthetic/mvc_interview_reflist 2 1 db3681d9568edf2599f4c9f5e2cf4ce4 f372da8cb6f0df25d0ef1f058e1c4ce4
+mvc-synthetic/mvc_mmco5_pairing 3 1 696a95091c933d253656812f9555a4e4 696a95091c933d253656812f9555a4e4
+mvc-synthetic/mvc_dependent_frame_num_gap 12 1 20fc95a352de8b25f2685fdbf0debce4 20fc95a352de8b25f2685fdbf0debce4 1
+mvc-synthetic/mvc_same_poc_pairing 320 1 304d38b6a717a325d5ef60a801e09ce4 304d38b6a717a325d5ef60a801e09ce4 1
+mvc-synthetic/mvc_display_ordering 8 1 0b51b61ff4711325ac6af977efce9ce4 95190a3f40631325987912b2f2731ce4
+# mvc_idr_leading (tests/gen_mvc_ordering.py idr-leading; see mvc-synthetic/README.md): an
+# IDR picture followed by two pictures displayed before it, while the dependent view of the
+# picture before it still waits for output. The base view order matches FFmpeg's; a decoder
+# counting both views against max_num_reorder_frames outputs the IDR picture first, so the
+# base and dependent hashes FAIL on the unfixed decoder.
+mvc-synthetic/mvc_idr_leading 8 1 58d6da9e905c1325f9beb79d14fc0ce4 619d8f9585e21325ac627ff6635d8ce4
+# MVC fixture encoded with JMVC 8.5 (ITU-T H.264.2), not an ITU vector; see
+# mvc-jmvc/README.md. Both views are anchored to the JMVC decoder's output
+# (check=OK dep_check=OK). Its dependent-view B slices put the base view at
+# RefPicList1[0] and use spatial direct prediction; taking that inter-view reference
+# for a short-term one (H.8.4) sets colZeroFlag where it must stay 0, so the
+# dependent-view hash FAILs on the unfixed decoder.
+mvc-jmvc/interview_colocated 9 1 15e7b2bf2bd163e6011cedc71f42cf7b ebbe590d783b360c8d19e92c9cdf42b9
+# mvcict1_fields: the first 18 field pictures of the ITU vector MVCICT-1 (two views of
+# fields; cut by tests/gen_stream_prefix.py; see mvc-jmvc/README.md), both views anchored to
+# the JMVC decoder's output for the whole vector, of which the prefix gives the first 9 frames.
+mvc-jmvc/mvcict1_fields 9 1 6bcc23be8aba3716357754c231200e7b 1ca9dd4e8f4ad1bbf0bfa2012fbe2f76
+# mvcict1_frame_order: mvcict1_fields with the field pictures of each frame in the order of
+# the frames of each view (base top and bottom fields, then the dependent ones; reordered by
+# tests/gen_field_frame_order.py), which must decode to the same output. A decoder that takes
+# the dependent second field right after the first for a damaged slice conceals it.
+mvc-jmvc/mvcict1_frame_order 9 1 6bcc23be8aba3716357754c231200e7b 1ca9dd4e8f4ad1bbf0bfa2012fbe2f76
+# mvcict2_mbaff: the first 9 frames of the ITU vector MVCICT-2 (two views of MBAFF frames;
+# cut by tests/gen_stream_prefix.py; see mvc-jmvc/README.md), both views anchored to the JMVC
+# decoder's output for the whole vector.
+mvc-jmvc/mvcict2_mbaff 9 1 528ad8d43ebbc0e7a205c1d395335cca ba44bf9588f7c3631df01ab203abac76

@@ -1,0 +1,28 @@
+# ASAN crafted-bitstream fixtures: <name> [clean] (decoded by tests/asan_check.c with a log callback)
+# The optional "clean" flag marks a VALID stream that must decode with zero EBADMSG.
+sei_payloadtype_oob
+sei_payloadsize_dos
+sei_recovery_point clean
+sei_short_payload clean
+reflist_oob
+slice_first_mb_oob
+mc_narrow_picture
+signed_shifts
+cavlc_run_before_zeros
+recover_p_slice
+unaligned_loads
+reader_overrun
+subpartition_neighbours
+mvc_format_change_unpaired
+mvc_subset_sps_size
+mvc_dpb_full_unpaired
+output_queue_full
+mvc_conceal_later_base
+mvc_orphan_dependents_gate
+poc_overflow
+recover_p_skip_weights
+reflist_poc_distance
+long_subset_sps clean
+subset_sps_truncated
+reflist_num_overflow
+sp_level_overflow
