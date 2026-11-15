@@ -20,7 +20,6 @@ add_library(CemuUtil
   helpers/ClassWrapper.h
   helpers/ConcurrentQueue.h
   helpers/enum_array.hpp
-  helpers/fixedSizeList.h
   helpers/fspinlock.h
   helpers/helpers.cpp
   helpers/helpers.h
@@ -44,11 +43,12 @@ add_library(CemuUtil
   ImageWriter/tga.h
   IniParser/IniParser.cpp
   IniParser/IniParser.h
-  math/glm.h
   math/quaternion.h
   math/vector2.h
   math/vector3.h
   MemMapper/MemMapper.h
+  Socket/Socket.cpp
+  Socket/Socket.h
   SystemInfo/SystemInfo.cpp
   SystemInfo/SystemInfo.h
   ThreadPool/ThreadPool.h
