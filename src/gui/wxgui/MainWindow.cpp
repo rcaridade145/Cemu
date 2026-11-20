@@ -2011,7 +2011,7 @@ public:
 			lineSizer->Add(new wxStaticText(parent, wxID_ANY, ")"));
 			sizer->Add(lineSizer);
 		}
-#if BOOST_OS_MACOS
+#if BOOST_OS_MACOS && defined(ENABLE_VULKAN) && !defined(ENABLE_KOSMICKRISP)
 		// MoltenVK
 		{
 			wxSizer* lineSizer = new wxBoxSizer(wxHORIZONTAL);

@@ -683,11 +683,11 @@ VulkanRenderer::VulkanRenderer() : Renderer(RendererAPI::Vulkan)
 	deviceFeatures.independentBlend = VK_TRUE;
 	deviceFeatures.samplerAnisotropy = VK_TRUE;
 	deviceFeatures.imageCubeArray = VK_TRUE;
-	//moltenVK supports logicOp via private api
+	// Enable logic operations only when the Vulkan driver advertises support.
 	deviceFeatures.logicOp = deviceFeatures2.features.logicOp;
 	if (!deviceFeatures.logicOp) {
 		cemuLog_log(LogType::Force, "LogicOp not supported by the driver, some rendering issues might occur");
-#if BOOST_OS_MACOS
+#if BOOST_OS_MACOS && !defined(ENABLE_KOSMICKRISP)
 		cemuLog_log(LogType::Force, "Install the privateapi variant of MoltenVK to get logicOp support on macOS");
 #endif
 	}

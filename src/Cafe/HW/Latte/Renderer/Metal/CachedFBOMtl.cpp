@@ -45,7 +45,7 @@ CachedFBOMtl::CachedFBOMtl(class MetalRenderer* metalRenderer, uint64 key) : Lat
 		hasAttachment = true;
 	}
 
-	// HACK: setup a dummy color attachment to prevent Metal from discarding draws for stremout draws in Super Smash Bros. for Wii U (works fine on MoltenVK without this hack though)
+	// Keep an attachment for streamout draws; Metal otherwise discards them when no attachments are set.
 	if (!hasAttachment)
 	{
         auto colorAttachment = m_renderPassDescriptor->colorAttachments()->object(0);

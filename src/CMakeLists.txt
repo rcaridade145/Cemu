@@ -19,9 +19,11 @@ elseif(UNIX)
 		if (ENABLE_VULKAN)
 			add_compile_definitions(
 				_XOPEN_SOURCE
-				VK_USE_PLATFORM_MACOS_MVK
 				VK_USE_PLATFORM_METAL_EXT
 			)
+			if (NOT ENABLE_KOSMICKRISP)
+				add_compile_definitions(VK_USE_PLATFORM_MACOS_MVK)
+			endif()
 		else()
 			add_compile_definitions(_XOPEN_SOURCE)
 		endif()
@@ -169,8 +171,6 @@ if (MACOS_BUNDLE)
 	if (ENABLE_VULKAN AND NOT ENABLE_KOSMICKRISP)
 		if (EXISTS "/usr/local/lib/libMoltenVK.dylib")
 			set(MOLTENVK_PATH "/usr/local/lib/libMoltenVK.dylib")
-		elseif (EXISTS "/opt/homebrew/lib/libMoltenVK.dylib")
-			set(MOLTENVK_PATH "/opt/homebrew/lib/libMoltenVK.dylib")
 		else()
 			message(FATAL_ERROR "failed to find libMoltenVK.dylib")
 		endif ()
@@ -241,7 +241,8 @@ else()
 			else()
 				find_library(MOLTENVK_LIBRARY
 					NAMES MoltenVK moltenvk libMoltenVK.dylib
-					PATHS /usr/local/lib /opt/homebrew/lib
+					PATHS /usr/local/lib
+					NO_DEFAULT_PATH
 				)
 				if(MOLTENVK_LIBRARY)
 					message(STATUS "Found MoltenVK: ${MOLTENVK_LIBRARY}")
@@ -251,7 +252,7 @@ else()
 				endif()
 				set_target_properties(CemuBin PROPERTIES
 					BUILD_WITH_INSTALL_RPATH TRUE
-					INSTALL_RPATH "/usr/local/lib;/opt/homebrew/lib"
+					INSTALL_RPATH "/usr/local/lib"
 				)
 			endif()
 		endif()

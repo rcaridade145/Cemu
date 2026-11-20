@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.21.1)
 option(ENABLE_VCPKG "Enable the vcpkg package manager" ON)
 option(MACOS_BUNDLE "The executable when built on macOS will be created as an application bundle" OFF)
 option(ALLOW_PORTABLE "Allow Cemu to be run in portable mode" ON)
-option(ENABLE_KOSMICKRISP "Use KosmicKrisp for Vulkan on macOS 26 or newer" OFF)
 
 # used by CI script to set version:
 set(EMULATOR_VERSION_MAJOR "0" CACHE STRING "")
@@ -100,11 +99,6 @@ endif()
 
 if (APPLE)
     enable_language(OBJC OBJCXX)
-    if (ENABLE_KOSMICKRISP)
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
-    else()
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.4")
-    endif()
 endif()
 
 if (UNIX AND NOT APPLE)
@@ -126,8 +120,43 @@ option(ENABLE_VULKAN "Enables the Vulkan backend" ON)
 option(ENABLE_METAL "Enables the Metal backend" ${ENABLE_METAL_DEFAULT})
 option(ENABLE_DISCORD_RPC "Enables the Discord Rich Presence feature" ON)
 
+set(CEMU_MACOS_ARM64 OFF)
+if (APPLE)
+    if (CMAKE_OSX_ARCHITECTURES MATCHES "(^|;)(arm64|ARM64)(;|$)" OR
+        (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64|AARCH64)$"))
+        set(CEMU_MACOS_ARM64 ON)
+    endif()
+endif()
+
+set(ENABLE_KOSMICKRISP_DEFAULT OFF)
+if (CEMU_MACOS_ARM64 AND ENABLE_VULKAN)
+    set(ENABLE_KOSMICKRISP_DEFAULT ON)
+endif()
+option(ENABLE_KOSMICKRISP "Use KosmicKrisp for Vulkan on Apple Silicon (macOS 26 or newer)" ${ENABLE_KOSMICKRISP_DEFAULT})
+
 if (ENABLE_KOSMICKRISP AND (NOT APPLE OR NOT ENABLE_VULKAN))
     message(FATAL_ERROR "KosmicKrisp requires macOS and the Vulkan backend")
+endif()
+
+if (ENABLE_KOSMICKRISP AND NOT CEMU_MACOS_ARM64)
+    message(FATAL_ERROR "KosmicKrisp requires an Apple Silicon target")
+endif()
+
+if (ENABLE_KOSMICKRISP AND CMAKE_OSX_ARCHITECTURES AND
+    NOT CMAKE_OSX_ARCHITECTURES MATCHES "^(arm64|ARM64)$")
+    message(FATAL_ERROR "KosmicKrisp requires a single-architecture arm64 build")
+endif()
+
+if (CEMU_MACOS_ARM64 AND ENABLE_VULKAN AND NOT ENABLE_KOSMICKRISP)
+    message(FATAL_ERROR "Vulkan on Apple Silicon requires KosmicKrisp")
+endif()
+
+if (APPLE)
+    if (ENABLE_KOSMICKRISP)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
+    else()
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.4")
+    endif()
 endif()
 
 if (ENABLE_METAL AND NOT APPLE)

@@ -18,7 +18,8 @@
 - [macOS](#macos)
    - [Installing brew](#installing-brew)
    - [Dependencies](#dependencies-1)
-   - [MoltenVK](#moltenvk)
+   - [MoltenVK (Intel Macs only)](#moltenvk-intel-macs-only)
+   - [KosmicKrisp (macOS 26 or newer, Apple Silicon)](#kosmickrisp-macos-26-or-newer-apple-silicon)
    - [Build Cemu using CMake](#build-cemu-using-cmake)
 - [FreeBSD](#freebsd)
 	- [Installing Dependencies](#installing-dependencies)
@@ -166,32 +167,30 @@ The following dependencies are required. You can install them using Homebrew wit
 
 `brew install automake boost cmake git libtool nasm ninja pkgconf`
 
-### MoltenVK
+### MoltenVK (Intel Macs only)
 
-Cemu uses the MoltenVK library to provide Vulkan support on macOS. While available on Brew, Cemu requires the "privateapi" version of MoltenVK, which is not available on Brew. To install the required version, follow the instructions below:
+Cemu uses MoltenVK for Vulkan support on Intel Macs. While available on Brew, Cemu requires the "privateapi" version of MoltenVK, which is not available on Brew. To install the required version, follow the instructions below:
 
 1. `curl -L -O https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.1/MoltenVK-macos-privateapi.tar`
 1. `tar xf MoltenVK-macos-privateapi.tar`
 1. Create a directory for the MoltenVK dylib if it doesn't already exist:
-   - **On an Apple Silicon Mac:** `sudo mkdir -p /opt/homebrew/lib`
    - **On an Intel Mac:** `sudo mkdir -p /usr/local/lib/`
 1. Copy the MoltenVK dylib to your system library directory:
-   - **On an Apple Silicon Mac:** `sudo cp MoltenVK/lib/libMoltenVK.dylib /opt/homebrew/lib/`
    - **On an Intel Mac:** `sudo cp MoltenVK/lib/libMoltenVK.dylib /usr/local/lib/`
 
 Alternatively, you can use the non-privateapi version of MoltenVK, but you may encounter some rendering issues due to the lack of logicOp support. If you want to go this route, simply install MoltenVK from Brew with `brew install molten-vk` and skip the steps above.
 
 ### KosmicKrisp (macOS 26 or newer, Apple Silicon)
 
-KosmicKrisp is an alternative Vulkan driver for Metal 4. It requires macOS 26 or newer and Apple Silicon. From the Cemu repository root, initialize the external driver source and install the build dependencies:
+KosmicKrisp is the default Vulkan driver for Apple Silicon and supports macOS 26 or newer. From the Cemu repository root, initialize the external driver source and install the build dependencies:
 
 1. `git submodule update --init --recursive dependencies/mesa-kosmickrisp`
 2. `brew install cmake meson ninja pkg-config llvm spirv-tools spirv-llvm-translator vulkan-loader`
 3. `pip3 install --break-system-packages mako packaging pyyaml`
-4. Configure Cemu with `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -DENABLE_KOSMICKRISP=ON -DCMAKE_OSX_ARCHITECTURES=arm64`
+4. Configure Cemu with `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -DCMAKE_OSX_ARCHITECTURES=arm64`
 5. Build Cemu and KosmicKrisp together with `cmake --build build --parallel`
 
-The KosmicKrisp build uses a macOS 26 deployment target and can be launched as `bin/Cemu_release`. Keep MoltenVK for older macOS versions and Intel Macs.
+The KosmicKrisp build uses a macOS 26 deployment target and can be launched as `bin/Cemu_release`. Intel Macs continue to use MoltenVK.
 
 ### Build Cemu using CMake
 

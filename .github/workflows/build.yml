@@ -217,9 +217,6 @@ jobs:
           - os: macos-15
             arch: x86_64
             vulkan: moltenvk
-          - os: macos-15
-            arch: arm64
-            vulkan: moltenvk
           - os: macos-26
             arch: arm64
             vulkan: kosmickrisp
